@@ -1,0 +1,1630 @@
+import { useEffect, useState, useCallback, useRef } from 'react';
+import { Users, ClipboardCheck, GraduationCap, Star, DollarSign, QrCode, Settings, CircleCheck as CheckCircle, Circle as XCircle, Clock, Plus, Trash2, CreditCard as Edit, Save, X, ScanLine, Calendar, MapPin, Award, BookOpen, Trophy, Play, Pause, TriangleAlert as AlertTriangle, StickyNote } from 'lucide-react';
+import { supabase } from '@/lib/supabase';
+import { useAuth } from '@/lib/auth';
+import { DashboardLayout } from '@/components/DashboardLayout';
+import { Modal } from '@/components/Modal';
+import { Loading, EmptyState, Badge } from '@/components/ui';
+import { StarRating } from '@/components/StarRating';
+import { computeStarFills, getCurrentWeekYear, getCategoryStars } from '@/lib/scoring';
+import { generateQrPayload, sessionSecret } from '@/lib/qr';
+import { createNotification } from '@/lib/notifications';
+import { formatDateArabic, formatTimeArabic } from '@/lib/date';
+import type { Profile, Course, Category, Evaluation, Session, FinancialDue, Task, Attendance, StudentNote } from '@/lib/types';
+import QRCode from 'qrcode';
+
+type Tab = 'overview' | 'approvals' | 'students' | 'courses' | 'attendance' | 'evaluations' | 'financial' | 'categories' | 'settings';
+
+export default function AdminDashboard() {
+  const [tab, setTab] = useState<Tab>('overview');
+  const { profile } = useAuth();
+
+  const navItems = [
+    { path: '/admin', label: 'الرئيسية', icon: <Users className="w-5 h-5" /> },
+  ];
+
+  return (
+    <DashboardLayout navItems={navItems}>
+      <div className="mb-6">
+        <h1 className="text-2xl font-bold text-forest-900">لوحة تحكم الشيخ</h1>
+        <p className="text-charcoal-500 text-sm mt-1">إدارة الطلاب والحضور والتقييمات والمالية</p>
+      </div>
+
+      {/* Tab bar */}
+      <div className="flex gap-2 overflow-x-auto pb-2 mb-6 -mx-4 px-4 lg:mx-0 lg:px-0">
+        {([
+          ['overview', 'نظرة عامة', <Users className="w-4 h-4" />],
+          ['approvals', 'الموافقات', <ClipboardCheck className="w-4 h-4" />],
+          ['students', 'الطلاب', <GraduationCap className="w-4 h-4" />],
+          ['courses', 'الدورات', <BookOpen className="w-4 h-4" />],
+          ['attendance', 'الحضور', <QrCode className="w-4 h-4" />],
+          ['evaluations', 'التقييمات', <Star className="w-4 h-4" />],
+          ['categories', 'الفئات', <Award className="w-4 h-4" />],
+          ['financial', 'المالية', <DollarSign className="w-4 h-4" />],
+          ['settings', 'الإعدادات', <Settings className="w-4 h-4" />],
+        ] as [Tab, string, React.ReactNode][]).map(([key, label, icon]) => (
+          <button
+            key={key}
+            onClick={() => setTab(key)}
+            className={`flex items-center gap-2 px-4 py-2.5 rounded-xl whitespace-nowrap transition-all ${tab === key ? 'bg-forest-800 text-cream-50 font-bold' : 'bg-white text-charcoal-600 hover:bg-cream-100'}`}
+          >
+            {icon}
+            <span className="text-sm">{label}</span>
+          </button>
+        ))}
+      </div>
+
+      {tab === 'overview' && <OverviewTab />}
+      {tab === 'approvals' && <ApprovalsTab />}
+      {tab === 'students' && <StudentsTab />}
+      {tab === 'courses' && <CoursesTab />}
+      {tab === 'attendance' && <AttendanceTab />}
+      {tab === 'evaluations' && <EvaluationsTab />}
+      {tab === 'categories' && <CategoriesTab />}
+      {tab === 'financial' && <FinancialTab />}
+      {tab === 'settings' && <SettingsTab />}
+    </DashboardLayout>
+  );
+}
+
+// ============ OVERVIEW ============
+function OverviewTab() {
+  const [stats, setStats] = useState({ pending: 0, approved: 0, courses: 0, unpaidTotal: 0 });
+  const [leaderboard, setLeaderboard] = useState<{ id: string; full_name: string; totalDeducted: number; presentCount: number }[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    (async () => {
+      const [{ count: pending }, { count: approved }, { count: courses }, { data: dues }, { data: students }, { data: evals }, { data: att }] = await Promise.all([
+        supabase.from('profiles').select('*', { count: 'exact', head: true }).eq('role', 'student').eq('status', 'pending'),
+        supabase.from('profiles').select('*', { count: 'exact', head: true }).eq('role', 'student').eq('status', 'approved'),
+        supabase.from('courses').select('*', { count: 'exact', head: true }),
+        supabase.from('financial_dues').select('amount').eq('status', 'unpaid'),
+        supabase.from('profiles').select('id, full_name').eq('role', 'student').eq('status', 'approved').order('full_name'),
+        supabase.from('evaluations').select('student_id, points_deducted'),
+        supabase.from('attendance').select('student_id, status').eq('status', 'present'),
+      ]);
+      const unpaidTotal = dues?.reduce((s, d) => s + Number(d.amount), 0) || 0;
+      setStats({ pending: pending || 0, approved: approved || 0, courses: courses || 0, unpaidTotal });
+
+      // Build leaderboard: lower totalDeducted = higher rank; presentCount as tiebreaker
+      const studentList = students as Pick<Profile, 'id' | 'full_name'>[] || [];
+      const deductedMap: Record<string, number> = {};
+      (evals || []).forEach((e: any) => {
+        deductedMap[e.student_id] = (deductedMap[e.student_id] || 0) + (e.points_deducted || 0);
+      });
+      const presentMap: Record<string, number> = {};
+      (att || []).forEach((a: any) => {
+        presentMap[a.student_id] = (presentMap[a.student_id] || 0) + 1;
+      });
+      const ranked = studentList.map((s) => ({
+        id: s.id,
+        full_name: s.full_name,
+        totalDeducted: deductedMap[s.id] || 0,
+        presentCount: presentMap[s.id] || 0,
+      })).sort((a, b) => a.totalDeducted - b.totalDeducted || b.presentCount - a.presentCount).slice(0, 10);
+      setLeaderboard(ranked);
+      setLoading(false);
+    })();
+  }, []);
+
+  if (loading) return <Loading />;
+
+  const cards = [
+    { label: 'طلاب قيد المراجعة', value: stats.pending, icon: <Clock className="w-6 h-6" />, color: 'bg-gold-100 text-gold-700' },
+    { label: 'طلاب معتمدون', value: stats.approved, icon: <GraduationCap className="w-6 h-6" />, color: 'bg-forest-100 text-forest-800' },
+    { label: 'الدورات', value: stats.courses, icon: <BookOpen className="w-6 h-6" />, color: 'bg-blue-100 text-blue-700' },
+    { label: 'إجمالي المستحقات', value: `${stats.unpaidTotal}`, icon: <DollarSign className="w-6 h-6" />, color: 'bg-red-100 text-red-700' },
+  ];
+
+  const rankColors = ['bg-gold-400 text-forest-900', 'bg-cream-300 text-forest-900', 'bg-orange-200 text-forest-900', 'bg-cream-100 text-charcoal-600', 'bg-cream-100 text-charcoal-600'];
+  const rankLabels = ['المركز الأول', 'المركز الثاني', 'المركز الثالث', 'المركز الرابع', 'المركز الخامس'];
+
+  return (
+    <div className="space-y-6">
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+        {cards.map((c) => (
+          <div key={c.label} className="card">
+            <div className={`w-12 h-12 rounded-xl flex items-center justify-center mb-3 ${c.color}`}>{c.icon}</div>
+            <p className="text-2xl font-bold text-forest-900">{c.value}</p>
+            <p className="text-charcoal-500 text-sm">{c.label}</p>
+          </div>
+        ))}
+      </div>
+
+      {/* Leaderboard */}
+      <div className="card">
+        <div className="flex items-center gap-2 mb-4">
+          <Trophy className="w-6 h-6 text-gold-500" />
+          <h3 className="text-lg font-bold text-forest-900">الأعلى تقيماً</h3>
+          <span className="text-xs text-charcoal-400">ترتيب الطلاب حسب أدنى خصم وأكثر حضور</span>
+        </div>
+        {leaderboard.length === 0 ? (
+          <p className="text-sm text-charcoal-400 py-4 text-center">لا يوجد طلاب معتمدون بعد</p>
+        ) : (
+          <div className="space-y-2">
+            {leaderboard.map((s, i) => (
+              <div key={s.id} className="flex items-center gap-3 p-3 rounded-xl bg-cream-50 hover:bg-cream-100 transition-colors">
+                <div className={`w-10 h-10 rounded-full flex items-center justify-center font-bold text-sm ${rankColors[i] || rankColors[4]}`}>
+                  {i + 1}
+                </div>
+                <div className="flex-1">
+                  <p className="font-bold text-forest-900">{s.full_name}</p>
+                  <p className="text-xs text-charcoal-400">{rankLabels[i] || `المركز ${i + 1}`}</p>
+                </div>
+                <div className="text-left">
+                  <p className="text-sm font-bold text-forest-800">خصم: {s.totalDeducted}</p>
+                  <p className="text-xs text-green-600">حضور: {s.presentCount}</p>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ============ APPROVALS ============
+function ApprovalsTab() {
+  const [pending, setPending] = useState<Profile[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    const { data } = await supabase.from('profiles').select('*').eq('status', 'pending').eq('role', 'student').order('created_at', { ascending: false });
+    setPending(data as Profile[] || []);
+    setLoading(false);
+  }, []);
+
+  useEffect(() => { load(); }, [load]);
+
+  const approve = async (p: Profile) => {
+    await supabase.from('profiles').update({ status: 'approved' }).eq('id', p.id);
+    await createNotification(p.id, 'تمت الموافقة على حسابك', 'مرحباً بك في أكاديمية زاد الإحسان! يمكنك الآن الدخول إلى بوابتك.', 'general');
+    load();
+  };
+
+  const reject = async (p: Profile) => {
+    await supabase.from('profiles').update({ status: 'rejected' }).eq('id', p.id);
+    load();
+  };
+
+  if (loading) return <Loading />;
+  if (pending.length === 0) return <EmptyState icon={<ClipboardCheck className="w-8 h-8" />} title="لا توجد طلبات انتظار" subtitle="جميع الطلبات تمت مراجعتها" />;
+
+  return (
+    <div className="space-y-3">
+      {pending.map((p) => (
+        <div key={p.id} className="card flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+          <div className="flex items-center gap-4">
+            <div className="w-12 h-12 rounded-full bg-gold-100 text-gold-700 flex items-center justify-center font-bold text-lg">
+              {p.full_name.charAt(0)}
+            </div>
+            <div>
+              <p className="font-bold text-forest-900">{p.full_name}</p>
+              <p className="text-sm text-charcoal-500">
+                {p.age ? `العمر: ${p.age} • ` : ''}{p.parent_phone ? `هاتف ولي الأمر: ${p.parent_phone}` : ''}
+              </p>
+              <p className="text-xs text-charcoal-400 mt-0.5">سُجّل في {formatDateArabic(p.created_at)}</p>
+            </div>
+          </div>
+          <div className="flex gap-2">
+            <button onClick={() => approve(p)} className="btn btn-primary text-sm">
+              <CheckCircle className="w-4 h-4" />
+              موافقة
+            </button>
+            <button onClick={() => reject(p)} className="btn btn-danger text-sm">
+              <XCircle className="w-4 h-4" />
+              رفض
+            </button>
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// ============ USERS (all profiles) ============
+// ============ STUDENT NOTES ============
+function StudentNotesSection({ studentId }: { studentId: string }) {
+  const [notes, setNotes] = useState<StudentNote[]>([]);
+  const [newNote, setNewNote] = useState('');
+  const [saving, setSaving] = useState(false);
+
+  const load = useCallback(async () => {
+    const { data } = await supabase.from('student_notes')
+      .select('*').eq('student_id', studentId).order('created_at', { ascending: false });
+    setNotes(data as StudentNote[] || []);
+  }, [studentId]);
+
+  useEffect(() => { load(); }, [load]);
+
+  const addNote = async () => {
+    if (!newNote.trim()) return;
+    setSaving(true);
+    await supabase.from('student_notes').insert({
+      student_id: studentId,
+      note: newNote.trim(),
+      note_type: 'supervisor',
+    });
+    setNewNote('');
+    setSaving(false);
+    load();
+  };
+
+  const deleteNote = async (id: string) => {
+    await supabase.from('student_notes').delete().eq('id', id);
+    load();
+  };
+
+  const typeLabels: Record<string, { label: string; color: string }> = {
+    supervisor: { label: 'ملاحظة مشرف', color: 'bg-blue-100 text-blue-700' },
+    absence: { label: 'غياب تلقائي', color: 'bg-red-100 text-red-700' },
+    general: { label: 'عامة', color: 'bg-cream-100 text-charcoal-600' },
+  };
+
+  return (
+    <div>
+      <div className="flex items-center gap-2 mb-2">
+        <StickyNote className="w-5 h-5 text-forest-700" />
+        <h4 className="font-bold text-forest-900">الملاحظات والغياب</h4>
+      </div>
+
+      <div className="flex gap-2 mb-3">
+        <input
+          value={newNote}
+          onChange={(e) => setNewNote(e.target.value)}
+          className="input flex-1"
+          placeholder="أضف ملاحظة كمشرف..."
+          onKeyDown={(e) => e.key === 'Enter' && addNote()}
+        />
+        <button onClick={addNote} disabled={saving || !newNote.trim()} className="btn btn-primary text-sm disabled:opacity-50">
+          <Plus className="w-4 h-4" />
+        </button>
+      </div>
+
+      <div className="space-y-2 max-h-40 overflow-y-auto">
+        {notes.length === 0 ? (
+          <p className="text-sm text-charcoal-400">لا توجد ملاحظات</p>
+        ) : notes.map((n) => (
+          <div key={n.id} className="flex items-start gap-2 p-3 rounded-xl bg-cream-50">
+            <div className="flex-1">
+              <div className="flex items-center gap-2 mb-1">
+                <span className={`text-xs font-bold px-2 py-0.5 rounded-full ${typeLabels[n.note_type]?.color || typeLabels.general.color}`}>
+                  {typeLabels[n.note_type]?.label || 'عامة'}
+                </span>
+                <span className="text-xs text-charcoal-400">{formatDateArabic(n.created_at)}</span>
+              </div>
+              <p className="text-sm text-charcoal-700">{n.note}</p>
+            </div>
+            <button onClick={() => deleteNote(n.id)} className="text-charcoal-400 hover:text-red-500">
+              <Trash2 className="w-4 h-4" />
+            </button>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function StudentsTab() {
+  const [users, setUsers] = useState<Profile[]>([]);
+  const [courses, setCourses] = useState<Course[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [selected, setSelected] = useState<Profile | null>(null);
+  const [enrollments, setEnrollments] = useState<Record<string, string[]>>({});
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    const [{ data: userData }, { data: courseData }, { data: enrollData }] = await Promise.all([
+      supabase.from('profiles').select('*').order('created_at', { ascending: false }),
+      supabase.from('courses').select('*').order('title'),
+      supabase.from('student_courses').select('student_id, course_id'),
+    ]);
+    setUsers(userData as Profile[] || []);
+    setCourses(courseData as Course[] || []);
+    const map: Record<string, string[]> = {};
+    (enrollData || []).forEach((e: any) => {
+      if (!map[e.student_id]) map[e.student_id] = [];
+      map[e.student_id].push(e.course_id);
+    });
+    setEnrollments(map);
+    setLoading(false);
+  }, []);
+
+  useEffect(() => { load(); }, [load]);
+
+  const toggleEnrollment = async (studentId: string, courseId: string) => {
+    const current = enrollments[studentId] || [];
+    if (current.includes(courseId)) {
+      await supabase.from('student_courses').delete().eq('student_id', studentId).eq('course_id', courseId);
+    } else {
+      await supabase.from('student_courses').insert({ student_id: studentId, course_id: courseId });
+    };
+    load();
+  };
+
+  const updateRole = async (userId: string, role: 'admin' | 'student') => {
+    await supabase.from('profiles').update({ role }).eq('id', userId);
+    load();
+    setSelected(prev => prev ? { ...prev, role } : null);
+  };
+
+  const updateStatus = async (userId: string, status: 'pending' | 'approved' | 'rejected') => {
+    await supabase.from('profiles').update({ status }).eq('id', userId);
+    if (status === 'approved') {
+      await createNotification(userId, 'تمت الموافقة على حسابك', 'مرحباً بك في أكاديمية زاد الإحسان! يمكنك الآن الدخول إلى بوابتك.', 'general');
+    }
+    load();
+    setSelected(prev => prev ? { ...prev, status } : null);
+  };
+
+  if (loading) return <Loading />;
+  if (users.length === 0) return <EmptyState icon={<GraduationCap className="w-8 h-8" />} title="لا يوجد مستخدمون" subtitle="بانتظار تسجيل الطلاب" />;
+
+  const roleLabel = (role: string) => role === 'admin' ? 'شيخ / مشرف' : 'طالب';
+  const statusLabel = (status: string) => status === 'approved' ? 'معتمد' : status === 'pending' ? 'قيد المراجعة' : 'مرفوض';
+  const statusColor = (status: string): 'green' | 'gold' | 'red' => status === 'approved' ? 'green' : status === 'pending' ? 'gold' : 'red';
+
+  return (
+    <>
+      <div className="mb-4">
+        <h3 className="text-lg font-bold text-forest-900">إدارة المستخدمين</h3>
+        <p className="text-sm text-charcoal-500">عرض جميع المستخدمين وتعديل أدوارهم وحالاتهم</p>
+      </div>
+      <div className="space-y-3">
+        {users.map((u) => (
+          <div key={u.id} className="card flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+            <div className="flex items-center gap-4">
+              <div className={`w-12 h-12 rounded-full flex items-center justify-center font-bold text-lg ${u.role === 'admin' ? 'bg-gold-100 text-gold-700' : 'bg-forest-100 text-forest-800'}`}>
+                {u.full_name.charAt(0)}
+              </div>
+              <div>
+                <div className="flex items-center gap-2 flex-wrap">
+                  <p className="font-bold text-forest-900">{u.full_name}</p>
+                  <Badge color={u.role === 'admin' ? 'gold' : 'forest'}>{roleLabel(u.role)}</Badge>
+                  <Badge color={statusColor(u.status)}>{statusLabel(u.status)}</Badge>
+                </div>
+                <p className="text-sm text-charcoal-500 mt-0.5">
+                  {u.age ? `العمر: ${u.age}` : ''} {u.parent_phone ? `• ${u.parent_phone}` : ''}
+                </p>
+                <div className="flex gap-1 mt-1">
+                  {(enrollments[u.id] || []).map((cid) => {
+                    const c = courses.find((c) => c.id === cid);
+                    return c ? <Badge key={cid} color="forest">{c.title}</Badge> : null;
+                  })}
+                </div>
+              </div>
+            </div>
+            <button onClick={() => setSelected(u)} className="btn btn-outline text-sm">
+              <Edit className="w-4 h-4" />
+              إدارة
+            </button>
+          </div>
+        ))}
+      </div>
+
+      <Modal open={!!selected} onClose={() => setSelected(null)} title={selected?.full_name || ''} size="lg">
+        {selected && (
+          <div className="space-y-5">
+            <div className="grid grid-cols-2 gap-3 text-sm">
+              <div className="bg-cream-50 rounded-xl p-3">
+                <p className="text-charcoal-400">العمر</p>
+                <p className="font-bold text-forest-900">{selected.age || '—'}</p>
+              </div>
+              <div className="bg-cream-50 rounded-xl p-3">
+                <p className="text-charcoal-400">هاتف ولي الأمر</p>
+                <p className="font-bold text-forest-900">{selected.parent_phone || '—'}</p>
+              </div>
+              <div className="bg-cream-50 rounded-xl p-3">
+                <p className="text-charcoal-400">تقدم القرآن</p>
+                <p className="font-bold text-forest-900">{selected.quran_progress}%</p>
+              </div>
+              <div className="bg-cream-50 rounded-xl p-3">
+                <p className="text-charcoal-400">الوحدة الحالية</p>
+                <p className="font-bold text-forest-900">{selected.current_module || '—'}</p>
+              </div>
+            </div>
+
+            {/* Role management */}
+            <div>
+              <h4 className="font-bold text-forest-900 mb-2">الدور</h4>
+              <div className="flex gap-2">
+                <button
+                  onClick={() => updateRole(selected.id, 'student')}
+                  className={`btn text-sm ${selected.role === 'student' ? 'btn-primary' : 'btn-outline'}`}
+                >
+                  <GraduationCap className="w-4 h-4" />
+                  طالب
+                </button>
+                <button
+                  onClick={() => updateRole(selected.id, 'admin')}
+                  className={`btn text-sm ${selected.role === 'admin' ? 'btn-gold' : 'btn-outline'}`}
+                >
+                  <Users className="w-4 h-4" />
+                  شيخ / مشرف
+                </button>
+              </div>
+            </div>
+
+            {/* Status management */}
+            <div>
+              <h4 className="font-bold text-forest-900 mb-2">حالة الحساب</h4>
+              <div className="flex gap-2 flex-wrap">
+                <button
+                  onClick={() => updateStatus(selected.id, 'pending')}
+                  className={`btn text-sm ${selected.status === 'pending' ? 'bg-gold-400 text-forest-900' : 'btn-outline'}`}
+                >
+                  <Clock className="w-4 h-4" />
+                  قيد المراجعة
+                </button>
+                <button
+                  onClick={() => updateStatus(selected.id, 'approved')}
+                  className={`btn text-sm ${selected.status === 'approved' ? 'btn-primary' : 'btn-outline'}`}
+                >
+                  <CheckCircle className="w-4 h-4" />
+                  اعتماد
+                </button>
+                <button
+                  onClick={() => updateStatus(selected.id, 'rejected')}
+                  className={`btn text-sm ${selected.status === 'rejected' ? 'btn-danger' : 'btn-outline'}`}
+                >
+                  <XCircle className="w-4 h-4" />
+                  رفض
+                </button>
+              </div>
+            </div>
+
+            {/* Course enrollment (only for students) */}
+            {selected.role === 'student' && (
+              <div>
+                <h4 className="font-bold text-forest-900 mb-2">الدورات المسجّل بها</h4>
+                <div className="space-y-2">
+                  {courses.length === 0 ? (
+                    <p className="text-sm text-charcoal-400">لا توجد دورات. أنشئ دورات من تبويب الدورات.</p>
+                  ) : (
+                    courses.map((c) => {
+                      const enrolled = (enrollments[selected.id] || []).includes(c.id);
+                      return (
+                        <label key={c.id} className="flex items-center gap-3 p-3 rounded-xl border border-cream-200 cursor-pointer hover:bg-cream-50">
+                          <input
+                            type="checkbox"
+                            checked={enrolled}
+                            onChange={() => toggleEnrollment(selected.id, c.id)}
+                            className="w-5 h-5 accent-forest-700"
+                          />
+                          <div>
+                            <p className="font-medium text-forest-900">{c.title}</p>
+                            <p className="text-xs text-charcoal-400">{c.schedule_days?.join(' • ') || c.schedule}</p>
+                          </div>
+                        </label>
+                      );
+                    })
+                  )}
+                </div>
+              </div>
+            )}
+
+            {/* Student notes (supervisor + auto-absence) */}
+            {selected.role === 'student' && (
+              <StudentNotesSection studentId={selected.id} />
+            )}
+          </div>
+        )}
+      </Modal>
+    </>
+  );
+}
+
+// ============ COURSES ============
+function CoursesTab() {
+  const [courses, setCourses] = useState<Course[]>([]);
+  const [sessions, setSessions] = useState<Session[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [editing, setEditing] = useState<Course | null>(null);
+  const [showForm, setShowForm] = useState(false);
+  const [showSession, setShowSession] = useState(false);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    const [{ data: courseData }, { data: sessionData }] = await Promise.all([
+      supabase.from('courses').select('*').order('created_at', { ascending: false }),
+      supabase.from('sessions').select('*').order('start_time', { ascending: false }),
+    ]);
+    setCourses(courseData as Course[] || []);
+    setSessions(sessionData as Session[] || []);
+    setLoading(false);
+  }, []);
+
+  useEffect(() => { load(); }, [load]);
+
+  const deleteCourse = async (id: string) => {
+    if (!confirm('هل أنت متأكد من حذف هذه الدورة؟')) return;
+    await supabase.from('courses').delete().eq('id', id);
+    load();
+  };
+
+  if (loading) return <Loading />;
+
+  return (
+    <div className="space-y-6">
+      <div className="flex items-center justify-between">
+        <h3 className="text-lg font-bold text-forest-900">الدورات والأنشطة</h3>
+        <button onClick={() => { setEditing(null); setShowForm(true); }} className="btn btn-gold text-sm">
+          <Plus className="w-4 h-4" />
+          دورة جديدة
+        </button>
+      </div>
+
+      {courses.length === 0 ? (
+        <EmptyState icon={<BookOpen className="w-8 h-8" />} title="لا توجد دورات" subtitle="أضف دورة جديدة لبدء التنظيم" />
+      ) : (
+        <div className="grid md:grid-cols-2 gap-4">
+          {courses.map((c) => (
+            <div key={c.id} className="card">
+              <div className="flex items-start justify-between mb-2">
+                <h4 className="font-bold text-forest-900">{c.title}</h4>
+                <div className="flex gap-1">
+                  <button onClick={() => { setEditing(c); setShowForm(true); }} className="p-1.5 rounded-lg hover:bg-cream-100 text-charcoal-500">
+                    <Edit className="w-4 h-4" />
+                  </button>
+                  <button onClick={() => deleteCourse(c.id)} className="p-1.5 rounded-lg hover:bg-red-50 text-red-500">
+                    <Trash2 className="w-4 h-4" />
+                  </button>
+                </div>
+              </div>
+              <p className="text-sm text-charcoal-500 mb-2">{c.description}</p>
+              {c.schedule_days && c.schedule_days.length > 0 ? (
+                <p className="text-xs text-charcoal-400">{c.schedule_days.join(' • ')}{c.schedule_start_time ? ` من ${c.schedule_start_time}` : ''}{c.schedule_end_time ? ` إلى ${c.schedule_end_time}` : ''}</p>
+              ) : c.schedule ? (
+                <p className="text-xs text-charcoal-400">المواعيد: {c.schedule}</p>
+              ) : null}
+              {c.session_duration_hours && Number(c.session_duration_hours) > 0 && (
+                <p className="text-xs text-forest-600 mt-1">مدة الحصة: {c.session_duration_hours} ساعة</p>
+              )}
+              {c.total_sessions && c.total_sessions > 0 && (
+                <p className="text-xs text-charcoal-400">عدد الحصص: {c.total_sessions}</p>
+              )}
+              {c.time_notes && (
+                <p className="text-xs text-gold-600 mt-1">{c.time_notes}</p>
+              )}
+              {c.supervisor_notes && (
+                <p className="text-xs text-charcoal-400 mt-1 flex items-start gap-1">
+                  <StickyNote className="w-3 h-3 mt-0.5 shrink-0" />{c.supervisor_notes}
+                </p>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Sessions */}
+      <div className="flex items-center justify-between pt-4">
+        <h3 className="text-lg font-bold text-forest-900">الحصص والمباريات</h3>
+        <button onClick={() => setShowSession(true)} className="btn btn-gold text-sm">
+          <Plus className="w-4 h-4" />
+          حصة جديدة
+        </button>
+      </div>
+
+      {sessions.length === 0 ? (
+        <EmptyState icon={<Calendar className="w-8 h-8" />} title="لا توجد حصص مجدولة" />
+      ) : (
+        <div className="space-y-2">
+          {sessions.map((s) => (
+            <div key={s.id} className="card flex items-center justify-between">
+              <div>
+                <div className="flex items-center gap-2 mb-1">
+                  <p className="font-bold text-forest-900">{s.title}</p>
+                  <Badge color={s.session_type === 'match' ? 'gold' : s.session_type === 'event' ? 'green' : 'forest'}>
+                    {s.session_type === 'match' ? 'مباراة' : s.session_type === 'event' ? 'فعالية' : 'حصة'}
+                  </Badge>
+                  {s.is_active && <Badge color="green">نشطة</Badge>}
+                </div>
+                <p className="text-sm text-charcoal-500">
+                  {formatDateArabic(s.start_time)} • {formatTimeArabic(s.start_time)} - {formatTimeArabic(s.end_time)}
+                </p>
+                {s.location && <p className="text-xs text-charcoal-400 flex items-center gap-1 mt-1"><MapPin className="w-3 h-3" />{s.location}</p>}
+              </div>
+              <button onClick={() => supabase.from('sessions').delete().eq('id', s.id).then(() => load())} className="p-2 rounded-lg hover:bg-red-50 text-red-500">
+                <Trash2 className="w-4 h-4" />
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {showForm && <CourseForm course={editing} onClose={() => setShowForm(false)} onSaved={() => { setShowForm(false); load(); }} />}
+      {showSession && <SessionForm courses={courses} onClose={() => setShowSession(false)} onSaved={() => { setShowSession(false); load(); }} />}
+    </div>
+  );
+}
+
+const WEEKDAYS = ['السبت', 'الأحد', 'الاثنين', 'الثلاثاء', 'الأربعاء', 'الخميس', 'الجمعة'];
+
+function CourseForm({ course, onClose, onSaved }: { course: Course | null; onClose: () => void; onSaved: () => void }) {
+  const [title, setTitle] = useState(course?.title || '');
+  const [description, setDescription] = useState(course?.description || '');
+  const [selectedDays, setSelectedDays] = useState<string[]>(course?.schedule_days || []);
+  const [startTime, setStartTime] = useState(course?.schedule_start_time || '');
+  const [endTime, setEndTime] = useState(course?.schedule_end_time || '');
+  const [durationHours, setDurationHours] = useState(course?.session_duration_hours?.toString() || '1.5');
+  const [timeNotes, setTimeNotes] = useState(course?.time_notes || '');
+  const [totalSessions, setTotalSessions] = useState(course?.total_sessions?.toString() || '0');
+  const [supervisorNotes, setSupervisorNotes] = useState(course?.supervisor_notes || '');
+  const [saving, setSaving] = useState(false);
+
+  const toggleDay = (day: string) => {
+    setSelectedDays((prev) => prev.includes(day) ? prev.filter((d) => d !== day) : [...prev, day]);
+  };
+
+  const save = async () => {
+    setSaving(true);
+    const payload = {
+      title,
+      description,
+      schedule_days: selectedDays,
+      schedule_start_time: startTime || null,
+      schedule_end_time: endTime || null,
+      session_duration_hours: parseFloat(durationHours) || 1.5,
+      time_notes: timeNotes,
+      total_sessions: parseInt(totalSessions) || 0,
+      supervisor_notes: supervisorNotes,
+    };
+    if (course) {
+      await supabase.from('courses').update(payload).eq('id', course.id);
+    } else {
+      await supabase.from('courses').insert(payload);
+    }
+    setSaving(false);
+    onSaved();
+  };
+
+  return (
+    <Modal open onClose={onClose} title={course ? 'تعديل دورة' : 'دورة جديدة'}>
+      <div className="space-y-4">
+        <div>
+          <label className="label">اسم الدورة</label>
+          <input value={title} onChange={(e) => setTitle(e.target.value)} className="input" placeholder="مثال: تجويد القرآن" />
+        </div>
+        <div>
+          <label className="label">الوصف</label>
+          <textarea value={description} onChange={(e) => setDescription(e.target.value)} className="input" rows={2} />
+        </div>
+        <div>
+          <label className="label">المواعيد الأسبوعية</label>
+          <div className="flex flex-wrap gap-2">
+            {WEEKDAYS.map((day) => (
+              <button
+                key={day}
+                type="button"
+                onClick={() => toggleDay(day)}
+                className={`px-3 py-2 rounded-xl text-sm font-medium transition-all ${selectedDays.includes(day) ? 'bg-forest-800 text-cream-50' : 'bg-cream-100 text-charcoal-500 hover:bg-cream-200'}`}
+              >
+                {day}
+              </button>
+            ))}
+          </div>
+        </div>
+        <div className="grid grid-cols-2 gap-3">
+          <div>
+            <label className="label">من الساعة</label>
+            <input type="time" value={startTime} onChange={(e) => setStartTime(e.target.value)} className="input" />
+          </div>
+          <div>
+            <label className="label">إلى الساعة</label>
+            <input type="time" value={endTime} onChange={(e) => setEndTime(e.target.value)} className="input" />
+          </div>
+        </div>
+        <div className="grid grid-cols-2 gap-3">
+          <div>
+            <label className="label">مدة الحصة (ساعات)</label>
+            <input type="number" step="0.5" min="0.5" value={durationHours} onChange={(e) => setDurationHours(e.target.value)} className="input" placeholder="1.5" />
+          </div>
+          <div>
+            <label className="label">عدد الحصص الإجمالي</label>
+            <input type="number" min="0" value={totalSessions} onChange={(e) => setTotalSessions(e.target.value)} className="input" placeholder="12" />
+          </div>
+        </div>
+        <div>
+          <label className="label">ملاحظات الوقت</label>
+          <input value={timeNotes} onChange={(e) => setTimeNotes(e.target.value)} className="input" placeholder="مثال: بعد صلاة الفجر مباشرة" />
+        </div>
+        <div>
+          <label className="label">ملاحظات المشرف</label>
+          <textarea value={supervisorNotes} onChange={(e) => setSupervisorNotes(e.target.value)} className="input" rows={2} placeholder="ملاحظات عامة على الدورة" />
+        </div>
+        <button onClick={save} disabled={saving || !title} className="btn btn-primary w-full">
+          <Save className="w-4 h-4" />
+          حفظ
+        </button>
+      </div>
+    </Modal>
+  );
+}
+
+function SessionForm({ courses, onClose, onSaved }: { courses: Course[]; onClose: () => void; onSaved: () => void }) {
+  const [title, setTitle] = useState('');
+  const [type, setType] = useState<'class' | 'match' | 'event'>('class');
+  const [courseId, setCourseId] = useState('');
+  const [location, setLocation] = useState('');
+  const [date, setDate] = useState('');
+  const [startTime, setStartTime] = useState('');
+  const [endTime, setEndTime] = useState('');
+  const [saving, setSaving] = useState(false);
+
+  const save = async () => {
+    setSaving(true);
+    const start = new Date(`${date}T${startTime}`);
+    const end = new Date(`${date}T${endTime}`);
+    await supabase.from('sessions').insert({
+      title,
+      session_type: type,
+      course_id: courseId || null,
+      location,
+      start_time: start.toISOString(),
+      end_time: end.toISOString(),
+    });
+    setSaving(false);
+    onSaved();
+  };
+
+  return (
+    <Modal open onClose={onClose} title="حصة / مباراة جديدة">
+      <div className="space-y-4">
+        <div>
+          <label className="label">العنوان</label>
+          <input value={title} onChange={(e) => setTitle(e.target.value)} className="input" placeholder="مثال: حصة القرآن - الأسبوع الأول" />
+        </div>
+        <div className="grid grid-cols-2 gap-3">
+          <div>
+            <label className="label">النوع</label>
+            <select value={type} onChange={(e) => setType(e.target.value as any)} className="input">
+              <option value="class">حصة</option>
+              <option value="match">مباراة</option>
+              <option value="event">فعالية</option>
+            </select>
+          </div>
+          <div>
+            <label className="label">الدورة (اختياري)</label>
+            <select value={courseId} onChange={(e) => setCourseId(e.target.value)} className="input">
+              <option value="">— بدون —</option>
+              {courses.map((c) => <option key={c.id} value={c.id}>{c.title}</option>)}
+            </select>
+          </div>
+        </div>
+        <div>
+          <label className="label">المكان</label>
+          <input value={location} onChange={(e) => setLocation(e.target.value)} className="input" placeholder="مثال: ملعب الأكاديمية" />
+        </div>
+        <div>
+          <label className="label">التاريخ</label>
+          <input type="date" value={date} onChange={(e) => setDate(e.target.value)} className="input" />
+        </div>
+        <div className="grid grid-cols-2 gap-3">
+          <div>
+            <label className="label">من الساعة</label>
+            <input type="time" value={startTime} onChange={(e) => setStartTime(e.target.value)} className="input" />
+          </div>
+          <div>
+            <label className="label">إلى الساعة</label>
+            <input type="time" value={endTime} onChange={(e) => setEndTime(e.target.value)} className="input" />
+          </div>
+        </div>
+        <button onClick={save} disabled={saving || !title || !date || !startTime || !endTime} className="btn btn-primary w-full">
+          <Save className="w-4 h-4" />
+          حفظ
+        </button>
+      </div>
+    </Modal>
+  );
+}
+
+// ============ ATTENDANCE (QR + Timer + Auto-Absence) ============
+function AttendanceTab() {
+  const [courses, setCourses] = useState<Course[]>([]);
+  const [sessions, setSessions] = useState<Session[]>([]);
+  const [activeSession, setActiveSession] = useState<Session | null>(null);
+  const [qrDataUrl, setQrDataUrl] = useState<string>('');
+  const [students, setStudents] = useState<Profile[]>([]);
+  const [attendance, setAttendance] = useState<Attendance[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [manualOpen, setManualOpen] = useState(false);
+  const [timerSeconds, setTimerSeconds] = useState<number>(0);
+  const [timerRunning, setTimerRunning] = useState(false);
+  const [timerEnded, setTimerEnded] = useState(false);
+  const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  const load = useCallback(async () => {
+    const [{ data: courseData }, { data: sessionData }] = await Promise.all([
+      supabase.from('courses').select('*').order('title'),
+      supabase.from('sessions').select('*').order('start_time', { ascending: false }),
+    ]);
+    setCourses(courseData as Course[] || []);
+    setSessions(sessionData as Session[] || []);
+    setLoading(false);
+  }, []);
+
+  useEffect(() => { load(); }, [load]);
+
+  // Find the most recent session for a course (or create one)
+  const startSession = async (course: Course) => {
+    const now = new Date();
+    const durationHours = course.session_duration_hours ? Number(course.session_duration_hours) : 1.5;
+    const durationMs = durationHours * 60 * 60 * 1000;
+    const endTime = new Date(now.getTime() + durationMs);
+
+    // Deactivate any currently active sessions
+    await supabase.from('sessions').update({ is_active: false }).eq('is_active', true);
+
+    // Create a new session for this course
+    const { data: newSession } = await supabase.from('sessions').insert({
+      course_id: course.id,
+      title: `${course.title} — ${formatDateArabic(now.toISOString())}`,
+      session_type: 'class',
+      location: '',
+      start_time: now.toISOString(),
+      end_time: endTime.toISOString(),
+      is_active: true,
+    }).select('*').single();
+
+    if (newSession) {
+      const s = newSession as Session;
+      setActiveSession(s);
+      setTimerSeconds(Math.floor(durationMs / 1000));
+      setTimerRunning(true);
+      setTimerEnded(false);
+      load();
+    }
+  };
+
+  // Timer countdown
+  useEffect(() => {
+    if (timerRunning && timerSeconds > 0) {
+      timerRef.current = setInterval(() => {
+        setTimerSeconds((prev) => {
+          if (prev <= 1) {
+            clearInterval(timerRef.current!);
+            setTimerRunning(false);
+            setTimerEnded(true);
+            return 0;
+          }
+          return prev - 1;
+        });
+      }, 1000);
+      return () => { if (timerRef.current) clearInterval(timerRef.current); };
+    }
+  }, [timerRunning]);
+
+  // Auto-absence when timer ends
+  useEffect(() => {
+    if (timerEnded && activeSession) {
+      markAbsentees(activeSession);
+    }
+  }, [timerEnded, activeSession]);
+
+  const markAbsentees = async (session: Session) => {
+    // Get all approved students
+    const { data: allStudents } = await supabase.from('profiles')
+      .select('*').eq('role', 'student').eq('status', 'approved');
+    const studentList = allStudents as Profile[] || [];
+
+    // Get existing attendance for this session
+    const { data: attData } = await supabase.from('attendance')
+      .select('*').eq('session_id', session.id);
+    const attList = attData as Attendance[] || [];
+    const presentIds = new Set(attList.filter((a) => a.status !== 'absent').map((a) => a.student_id));
+
+    // For students with no attendance record, mark absent + create note
+    const absentees = studentList.filter((s) => !presentIds.has(s.id));
+    const courseTitle = session.title.split(' — ')[0] || session.title;
+
+    for (const student of absentees) {
+      // Insert absence attendance record
+      await supabase.from('attendance').insert({
+        student_id: student.id,
+        session_id: session.id,
+        status: 'absent',
+        points_deducted: 7,
+      });
+      // Insert automated absence note
+      await supabase.from('student_notes').insert({
+        student_id: student.id,
+        course_id: session.course_id,
+        session_id: session.id,
+        note: `لم يسجل حضوراً في حصة ${courseTitle}`,
+        note_type: 'absence',
+      });
+      // Notify the student
+      await createNotification(student.id, 'غياب تلقائي', `لم يتم تسجيل حضورك في ${courseTitle}`, 'attendance');
+    }
+
+    if (absentees.length > 0) {
+      loadAttendance(session.id);
+    }
+  };
+
+  const endSessionEarly = async () => {
+    if (!activeSession) return;
+    if (timerRef.current) clearInterval(timerRef.current);
+    setTimerRunning(false);
+    setTimerEnded(true);
+  };
+
+  const pauseTimer = () => {
+    if (timerRef.current) clearInterval(timerRef.current);
+    setTimerRunning(false);
+  };
+
+  const resumeTimer = () => {
+    if (timerSeconds > 0) setTimerRunning(true);
+  };
+
+  const closeSession = async () => {
+    if (activeSession) {
+      await supabase.from('sessions').update({ is_active: false }).eq('id', activeSession.id);
+    }
+    if (timerRef.current) clearInterval(timerRef.current);
+    setActiveSession(null);
+    setTimerRunning(false);
+    setTimerEnded(false);
+    setTimerSeconds(0);
+    load();
+  };
+
+  const loadAttendance = useCallback(async (sessionId: string) => {
+    const [{ data: attData }, { data: studentData }] = await Promise.all([
+      supabase.from('attendance').select('*').eq('session_id', sessionId),
+      supabase.from('profiles').select('*').eq('role', 'student').eq('status', 'approved').order('full_name'),
+    ]);
+    setAttendance(attData as Attendance[] || []);
+    setStudents(studentData as Profile[] || []);
+  }, []);
+
+  useEffect(() => {
+    if (!activeSession) return;
+    loadAttendance(activeSession.id);
+
+    const generateQr = async () => {
+      const payload = await generateQrPayload(activeSession.id, sessionSecret(activeSession.id));
+      const url = await QRCode.toDataURL(payload, { width: 300, margin: 2, color: { dark: '#132E20', light: '#FDFBF7' } });
+      setQrDataUrl(url);
+    };
+    generateQr();
+    const interval = setInterval(generateQr, 60000);
+    return () => clearInterval(interval);
+  }, [activeSession, loadAttendance]);
+
+  const setManualAttendance = async (studentId: string, status: 'present' | 'late' | 'absent') => {
+    if (!activeSession) return;
+    const existing = attendance.find((a) => a.student_id === studentId);
+    const pointsDeducted = status === 'late' ? 0 : status === 'absent' ? 7 : 0;
+    if (existing) {
+      await supabase.from('attendance').update({ status, points_deducted: pointsDeducted }).eq('id', existing.id);
+    } else {
+      await supabase.from('attendance').insert({ student_id: studentId, session_id: activeSession.id, status, points_deducted: pointsDeducted });
+    }
+    await createNotification(studentId, 'تحديث الحضور', `تم تسجيل حضورك كـ "${status === 'present' ? 'حاضر' : status === 'late' ? 'متأخر' : 'غائب'}" في ${activeSession.title}`, 'attendance');
+    loadAttendance(activeSession.id);
+  };
+
+  const formatTimer = (secs: number) => {
+    const h = Math.floor(secs / 3600);
+    const m = Math.floor((secs % 3600) / 60);
+    const s = secs % 60;
+    return `${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
+  };
+
+  if (loading) return <Loading />;
+
+  // Session active view
+  if (activeSession) {
+    const course = courses.find((c) => c.id === activeSession.course_id);
+    return (
+      <div className="space-y-6">
+        <div className="card flex items-center justify-between">
+          <div>
+            <p className="font-bold text-forest-900">{activeSession.title}</p>
+            <p className="text-sm text-charcoal-500">{course?.time_notes || `${formatTimeArabic(activeSession.start_time)} - ${formatTimeArabic(activeSession.end_time)}`}</p>
+          </div>
+          <button onClick={closeSession} className="btn btn-outline text-sm">
+            <X className="w-4 h-4" />
+            إنهاء الحصة
+          </button>
+        </div>
+
+        {/* Timer */}
+        <div className={`card text-center ${timerEnded ? 'bg-red-50 border-red-200' : timerRunning ? 'bg-forest-50 border-forest-200' : 'bg-cream-50'}`}>
+          <div className="flex items-center justify-center gap-2 mb-2">
+            <Clock className={`w-6 h-6 ${timerEnded ? 'text-red-500' : 'text-forest-700'}`} />
+            <span className="text-sm font-bold text-charcoal-600">{timerEnded ? 'انتهت الحصة' : timerRunning ? 'الحصة جارية' : 'متوقف مؤقتاً'}</span>
+          </div>
+          <p className={`text-5xl font-bold mb-4 ${timerEnded ? 'text-red-600' : 'text-forest-900'}`}>{formatTimer(timerSeconds)}</p>
+          {timerEnded ? (
+            <div className="flex items-center justify-center gap-2 text-sm text-red-600">
+              <AlertTriangle className="w-5 h-5" />
+              تم تسجيل غياب الطلاب غير الحاضرين تلقائياً
+            </div>
+          ) : (
+            <div className="flex items-center justify-center gap-2">
+              {timerRunning ? (
+                <button onClick={pauseTimer} className="btn btn-outline text-sm">
+                  <Pause className="w-4 h-4" />
+                  إيقاف مؤقت
+                </button>
+              ) : (
+                <button onClick={resumeTimer} className="btn btn-outline text-sm">
+                  <Play className="w-4 h-4" />
+                  استئناف
+                </button>
+              )}
+              <button onClick={endSessionEarly} className="btn btn-primary text-sm">
+                <AlertTriangle className="w-4 h-4" />
+                إنهاء وتسجيل الغياب
+              </button>
+            </div>
+          )}
+        </div>
+
+        <div className="grid lg:grid-cols-2 gap-6">
+          {/* QR Display */}
+          {!timerEnded && (
+            <div className="card text-center">
+              <h4 className="font-bold text-forest-900 mb-2">رمز الحضور الديناميكي</h4>
+              <p className="text-sm text-charcoal-500 mb-4">يتجدد كل 60 ثانية — اطلب من الطلاب مسحه</p>
+              {qrDataUrl ? (
+                <div className="relative inline-block animate-fade-in">
+                  <img src={qrDataUrl} alt="QR Code" className="rounded-xl mx-auto" />
+                  <div className="absolute top-2 right-2 bg-gold-400 text-forest-900 text-xs font-bold px-2 py-1 rounded-full animate-pulse">
+                    مباشر
+                  </div>
+                </div>
+              ) : <Loading />}
+            </div>
+          )}
+
+          {/* Attendance list */}
+          <div className={`card ${timerEnded ? 'lg:col-span-2' : ''}`}>
+            <div className="flex items-center justify-between mb-4">
+              <h4 className="font-bold text-forest-900">سجل الحضور</h4>
+              <button onClick={() => setManualOpen(!manualOpen)} className="btn btn-outline text-sm">
+                <Edit className="w-4 h-4" />
+                تسجيل يدوي
+              </button>
+            </div>
+            <div className="space-y-2 max-h-96 overflow-y-auto">
+              {students.map((s) => {
+                const att = attendance.find((a) => a.student_id === s.id);
+                return (
+                  <div key={s.id} className="flex items-center justify-between p-2 rounded-lg hover:bg-cream-50">
+                    <span className="text-sm font-medium text-charcoal-700">{s.full_name}</span>
+                    {manualOpen ? (
+                      <div className="flex gap-1">
+                        <button onClick={() => setManualAttendance(s.id, 'present')} className={`px-2 py-1 rounded-lg text-xs ${att?.status === 'present' ? 'bg-green-500 text-white' : 'bg-cream-100 text-charcoal-500'}`}>حاضر</button>
+                        <button onClick={() => setManualAttendance(s.id, 'late')} className={`px-2 py-1 rounded-lg text-xs ${att?.status === 'late' ? 'bg-gold-400 text-forest-900' : 'bg-cream-100 text-charcoal-500'}`}>متأخر</button>
+                        <button onClick={() => setManualAttendance(s.id, 'absent')} className={`px-2 py-1 rounded-lg text-xs ${att?.status === 'absent' ? 'bg-red-500 text-white' : 'bg-cream-100 text-charcoal-500'}`}>غائب</button>
+                      </div>
+                    ) : att ? (
+                      <Badge color={att.status === 'present' ? 'green' : att.status === 'late' ? 'gold' : 'red'}>
+                        {att.status === 'present' ? 'حاضر' : att.status === 'late' ? 'متأخر' : 'غائب'}
+                      </Badge>
+                    ) : (
+                      <Badge color="gray">لم يُسجل</Badge>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // Course picker view
+  return (
+    <div className="space-y-6">
+      <h3 className="text-lg font-bold text-forest-900">الحصة التي ستبدأ الآن — اختر دورة لبدء الحصة</h3>
+
+      {courses.length === 0 ? (
+        <EmptyState icon={<Calendar className="w-8 h-8" />} title="لا توجد دورات" subtitle="أنشئ دورة من تبويب الدورات أولاً" />
+      ) : (
+        <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-4">
+          {courses.map((c) => {
+            const courseSessions = sessions.filter((s) => s.course_id === c.id);
+            const activeS = courseSessions.find((s) => s.is_active);
+            return (
+              <div key={c.id} className="card hover:shadow-lg transition-shadow">
+                <div className="mb-3">
+                  <p className="font-bold text-forest-900">{c.title}</p>
+                  {c.schedule_days && c.schedule_days.length > 0 && (
+                    <p className="text-xs text-charcoal-400 mt-1">{c.schedule_days.join(' • ')}</p>
+                  )}
+                  {c.session_duration_hours && Number(c.session_duration_hours) > 0 && (
+                    <p className="text-xs text-forest-600 mt-1">مدة الحصة: {c.session_duration_hours} ساعة</p>
+                  )}
+                  {c.time_notes && (
+                    <p className="text-xs text-gold-600 mt-1">{c.time_notes}</p>
+                  )}
+                </div>
+                <div className="flex items-center justify-between mb-3">
+                  <span className="text-xs text-charcoal-400">الحصص السابقة: {courseSessions.length}</span>
+                  {activeS && <Badge color="green">نشطة الآن</Badge>}
+                </div>
+                {activeS ? (
+                  <button onClick={() => {
+                    setActiveSession(activeS);
+                    const remaining = Math.floor((new Date(activeS.end_time).getTime() - Date.now()) / 1000);
+                    setTimerSeconds(Math.max(0, remaining));
+                    setTimerRunning(remaining > 0);
+                    setTimerEnded(remaining <= 0);
+                  }} className="btn btn-primary w-full text-sm">
+                    <QrCode className="w-4 h-4" />
+                    متابعة الحصة النشطة
+                  </button>
+                ) : (
+                  <button onClick={() => startSession(c)} className="btn btn-primary w-full text-sm">
+                    <Play className="w-4 h-4" />
+                    بدء الحصة الآن
+                  </button>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {/* Recent sessions history */}
+      {sessions.length > 0 && (
+        <div className="card">
+          <h4 className="font-bold text-forest-900 mb-3">سجل الحصص السابقة</h4>
+          <div className="space-y-2 max-h-60 overflow-y-auto">
+            {sessions.slice(0, 10).map((s) => (
+              <div key={s.id} className="flex items-center justify-between p-2 rounded-lg bg-cream-50">
+                <div>
+                  <p className="text-sm font-medium text-forest-900">{s.title}</p>
+                  <p className="text-xs text-charcoal-400">{formatDateArabic(s.start_time)} • {formatTimeArabic(s.start_time)}</p>
+                </div>
+                {s.is_active && <Badge color="green">نشطة</Badge>}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ============ EVALUATIONS ============
+function EvaluationsTab() {
+  const [students, setStudents] = useState<Profile[]>([]);
+  const [categories, setCategories] = useState<Category[]>([]);
+  const [evaluations, setEvaluations] = useState<Evaluation[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [selectedStudent, setSelectedStudent] = useState<Profile | null>(null);
+  const [editValues, setEditValues] = useState<Record<string, { deducted: number; note: string }>>({});
+  const { weekNumber, year } = getCurrentWeekYear();
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    const [{ data: studentData }, { data: catData }] = await Promise.all([
+      supabase.from('profiles').select('*').eq('role', 'student').eq('status', 'approved').order('full_name'),
+      supabase.from('categories').select('*').order('name'),
+    ]);
+    setStudents(studentData as Profile[] || []);
+    setCategories(catData as Category[] || []);
+    setLoading(false);
+  }, []);
+
+  useEffect(() => { load(); }, [load]);
+
+  const loadEvaluations = useCallback(async (studentId: string) => {
+    const { data } = await supabase.from('evaluations').select('*, category:category(*)').eq('student_id', studentId).eq('week_number', weekNumber).eq('year', year);
+    setEvaluations(data as Evaluation[] || []);
+    const evMap: Record<string, { deducted: number; note: string }> = {};
+    (data as Evaluation[] || []).forEach((e) => {
+      evMap[e.category_id] = { deducted: e.points_deducted, note: e.note };
+    });
+    setEditValues(evMap);
+  }, [weekNumber, year]);
+
+  useEffect(() => {
+    if (selectedStudent) loadEvaluations(selectedStudent.id);
+  }, [selectedStudent, loadEvaluations]);
+
+  const saveEvaluation = async (categoryId: string) => {
+    if (!selectedStudent) return;
+    const val = editValues[categoryId] || { deducted: 0, note: '' };
+    const existing = evaluations.find((e) => e.category_id === categoryId);
+    if (existing) {
+      await supabase.from('evaluations').update({ points_deducted: val.deducted, note: val.note }).eq('id', existing.id);
+    } else {
+      await supabase.from('evaluations').insert({
+        student_id: selectedStudent.id,
+        category_id: categoryId,
+        week_number: weekNumber,
+        year,
+        points_deducted: val.deducted,
+        note: val.note,
+      });
+    }
+    const cat = categories.find((c) => c.id === categoryId);
+    if (val.note) {
+      await createNotification(selectedStudent.id, 'ملاحظة جديدة', `${cat?.name || 'تقييم'}: ${val.note}`, 'note');
+    }
+    loadEvaluations(selectedStudent.id);
+  };
+
+  if (loading) return <Loading />;
+
+  if (!selectedStudent) {
+    return (
+      <div className="space-y-4">
+        <h3 className="text-lg font-bold text-forest-900">التقييم الأسبوعي — اختر الطالب</h3>
+        {students.length === 0 ? (
+          <EmptyState icon={<Star className="w-8 h-8" />} title="لا يوجد طلاب" />
+        ) : (
+          <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-3">
+            {students.map((s) => (
+              <button key={s.id} onClick={() => setSelectedStudent(s)} className="card text-right hover:shadow-lg transition-shadow">
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 rounded-full bg-forest-100 text-forest-800 flex items-center justify-center font-bold">
+                    {s.full_name.charAt(0)}
+                  </div>
+                  <p className="font-bold text-forest-900">{s.full_name}</p>
+                </div>
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-3">
+          <button onClick={() => setSelectedStudent(null)} className="btn btn-outline text-sm">
+            <X className="w-4 h-4" />
+            رجوع
+          </button>
+          <h3 className="text-lg font-bold text-forest-900">تقييم: {selectedStudent.full_name}</h3>
+        </div>
+        <Badge color="gold">الأسبوع {weekNumber} - {year}</Badge>
+      </div>
+
+      <div className="space-y-3">
+        {categories.map((cat) => {
+          const val = editValues[cat.id] || { deducted: 0, note: '' };
+          const fills = computeStarFills(val.deducted, cat.max_points);
+          return (
+            <div key={cat.id} className="card">
+              <div className="flex items-center justify-between mb-3">
+                <div>
+                  <p className="font-bold text-forest-900">{cat.name}</p>
+                  <p className="text-xs text-charcoal-400">{cat.description}</p>
+                </div>
+                <StarRating fills={fills} size={20} />
+              </div>
+              <div className="grid sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="label">الخصم ({val.deducted}/{cat.max_points})</label>
+                  <input
+                    type="range"
+                    min="0"
+                    max={cat.max_points}
+                    value={val.deducted}
+                    onChange={(e) => setEditValues({ ...editValues, [cat.id]: { ...val, deducted: parseInt(e.target.value) } })}
+                    className="w-full accent-forest-700"
+                  />
+                </div>
+                <div>
+                  <label className="label">ملاحظة</label>
+                  <input
+                    value={val.note}
+                    onChange={(e) => setEditValues({ ...editValues, [cat.id]: { ...val, note: e.target.value } })}
+                    className="input"
+                    placeholder="ملاحظة للطالب..."
+                  />
+                </div>
+              </div>
+              <button onClick={() => saveEvaluation(cat.id)} className="btn btn-primary text-sm mt-3">
+                <Save className="w-4 h-4" />
+                حفظ التقييم
+              </button>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+// ============ CATEGORIES ============
+function CategoriesTab() {
+  const [categories, setCategories] = useState<Category[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [showForm, setShowForm] = useState(false);
+  const [editing, setEditing] = useState<Category | null>(null);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    const { data } = await supabase.from('categories').select('*').order('name');
+    setCategories(data as Category[] || []);
+    setLoading(false);
+  }, []);
+
+  useEffect(() => { load(); }, [load]);
+
+  const deleteCategory = async (id: string) => {
+    if (!confirm('هل أنت متأكد؟ سيتم حذف جميع التقييمات المرتبطة.')) return;
+    await supabase.from('categories').delete().eq('id', id);
+    load();
+  };
+
+  if (loading) return <Loading />;
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center justify-between">
+        <h3 className="text-lg font-bold text-forest-900">فئات التقييم</h3>
+        <button onClick={() => { setEditing(null); setShowForm(true); }} className="btn btn-gold text-sm">
+          <Plus className="w-4 h-4" />
+          فئة جديدة
+        </button>
+      </div>
+      <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-3">
+        {categories.map((c) => (
+          <div key={c.id} className="card">
+            <div className="flex items-start justify-between">
+              <div>
+                <p className="font-bold text-forest-900">{c.name}</p>
+                <p className="text-sm text-charcoal-500">{c.description}</p>
+                <Badge color="gold">الحد الأقصى: {c.max_points} نقطة</Badge>
+              </div>
+              <div className="flex gap-1">
+                <button onClick={() => { setEditing(c); setShowForm(true); }} className="p-1.5 rounded-lg hover:bg-cream-100 text-charcoal-500">
+                  <Edit className="w-4 h-4" />
+                </button>
+                <button onClick={() => deleteCategory(c.id)} className="p-1.5 rounded-lg hover:bg-red-50 text-red-500">
+                  <Trash2 className="w-4 h-4" />
+                </button>
+              </div>
+            </div>
+          </div>
+        ))}
+      </div>
+      {showForm && <CategoryForm category={editing} onClose={() => setShowForm(false)} onSaved={() => { setShowForm(false); load(); }} />}
+    </div>
+  );
+}
+
+function CategoryForm({ category, onClose, onSaved }: { category: Category | null; onClose: () => void; onSaved: () => void }) {
+  const [name, setName] = useState(category?.name || '');
+  const [description, setDescription] = useState(category?.description || '');
+  const [maxPoints, setMaxPoints] = useState(category?.max_points || 25);
+  const [saving, setSaving] = useState(false);
+
+  const save = async () => {
+    setSaving(true);
+    if (category) {
+      await supabase.from('categories').update({ name, description, max_points: maxPoints }).eq('id', category.id);
+    } else {
+      await supabase.from('categories').insert({ name, description, max_points: maxPoints });
+    }
+    setSaving(false);
+    onSaved();
+  };
+
+  return (
+    <Modal open onClose={onClose} title={category ? 'تعديل فئة' : 'فئة جديدة'}>
+      <div className="space-y-4">
+        <div>
+          <label className="label">اسم الفئة</label>
+          <input value={name} onChange={(e) => setName(e.target.value)} className="input" placeholder="مثال: الأخلاق" />
+        </div>
+        <div>
+          <label className="label">الوصف</label>
+          <input value={description} onChange={(e) => setDescription(e.target.value)} className="input" />
+        </div>
+        <div>
+          <label className="label">الحد الأقصى للنقاط</label>
+          <input type="number" value={maxPoints} onChange={(e) => setMaxPoints(parseInt(e.target.value) || 25)} className="input" />
+        </div>
+        <button onClick={save} disabled={saving || !name} className="btn btn-primary w-full">
+          <Save className="w-4 h-4" />
+          حفظ
+        </button>
+      </div>
+    </Modal>
+  );
+}
+
+// ============ FINANCIAL ============
+function FinancialTab() {
+  const [students, setStudents] = useState<Profile[]>([]);
+  const [dues, setDues] = useState<FinancialDue[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [selected, setSelected] = useState<Profile | null>(null);
+  const [showAdd, setShowAdd] = useState(false);
+  const [newDesc, setNewDesc] = useState('');
+  const [newAmount, setNewAmount] = useState('');
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    const { data } = await supabase.from('profiles').select('*').eq('role', 'student').eq('status', 'approved').order('full_name');
+    setStudents(data as Profile[] || []);
+    setLoading(false);
+  }, []);
+
+  useEffect(() => { load(); }, [load]);
+
+  const loadDues = useCallback(async (studentId: string) => {
+    const { data } = await supabase.from('financial_dues').select('*').eq('student_id', studentId).order('created_at', { ascending: false });
+    setDues(data as FinancialDue[] || []);
+  }, []);
+
+  useEffect(() => {
+    if (selected) loadDues(selected.id);
+  }, [selected, loadDues]);
+
+  const togglePaid = async (due: FinancialDue) => {
+    const newStatus = due.status === 'unpaid' ? 'paid' : 'unpaid';
+    await supabase.from('financial_dues').update({ status: newStatus }).eq('id', due.id);
+    if (newStatus === 'paid' && selected) {
+      await createNotification(selected.id, 'تحديث مالي', `تم تسديد "${due.description}" بمبلغ $${due.amount}`, 'financial');
+    }
+    if (selected) loadDues(selected.id);
+  };
+
+  const addDue = async () => {
+    if (!selected || !newDesc || !newAmount) return;
+    await supabase.from('financial_dues').insert({
+      student_id: selected.id,
+      description: newDesc,
+      amount: parseFloat(newAmount),
+    });
+    await createNotification(selected.id, 'رسوم جديدة', `${newDesc}: $${newAmount}`, 'financial');
+    setNewDesc('');
+    setNewAmount('');
+    setShowAdd(false);
+    loadDues(selected.id);
+  };
+
+  const deleteDue = async (id: string) => {
+    await supabase.from('financial_dues').delete().eq('id', id);
+    if (selected) loadDues(selected.id);
+  };
+
+  if (loading) return <Loading />;
+
+  if (!selected) {
+    return (
+      <div className="space-y-4">
+        <h3 className="text-lg font-bold text-forest-900">الإدارة المالية — اختر الطالب</h3>
+        <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-3">
+          {students.map((s) => (
+            <button key={s.id} onClick={() => setSelected(s)} className="card text-right hover:shadow-lg transition-shadow">
+              <p className="font-bold text-forest-900">{s.full_name}</p>
+            </button>
+          ))}
+        </div>
+      </div>
+    );
+  }
+
+  const totalUnpaid = dues.filter((d) => d.status === 'unpaid').reduce((s, d) => s + Number(d.amount), 0);
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-3">
+          <button onClick={() => setSelected(null)} className="btn btn-outline text-sm">
+            <X className="w-4 h-4" />
+            رجوع
+          </button>
+          <h3 className="text-lg font-bold text-forest-900">{selected.full_name}</h3>
+        </div>
+        <button onClick={() => setShowAdd(true)} className="btn btn-gold text-sm">
+          <Plus className="w-4 h-4" />
+          إضافة رسوم
+        </button>
+      </div>
+
+      <div className="card bg-forest-900 text-cream-50">
+        <p className="text-cream-300 text-sm">إجمالي المستحقات غير المدفوعة</p>
+        <p className="text-3xl font-bold text-gold-400">${totalUnpaid}</p>
+      </div>
+
+      {dues.length === 0 ? (
+        <EmptyState icon={<DollarSign className="w-8 h-8" />} title="لا توجد رسوم" />
+      ) : (
+        <div className="space-y-2">
+          {dues.map((d) => (
+            <div key={d.id} className="card flex items-center justify-between">
+              <div>
+                <p className="font-medium text-forest-900">{d.description}</p>
+                <p className="text-sm text-charcoal-500">${d.amount} • {formatDateArabic(d.created_at)}</p>
+              </div>
+              <div className="flex items-center gap-2">
+                <button onClick={() => togglePaid(d)} className={`badge cursor-pointer ${d.status === 'unpaid' ? 'bg-red-100 text-red-700' : 'bg-green-100 text-green-700'}`}>
+                  {d.status === 'unpaid' ? 'غير مدفوع' : 'مدفوع'}
+                </button>
+                <button onClick={() => deleteDue(d.id)} className="p-1.5 rounded-lg hover:bg-red-50 text-red-500">
+                  <Trash2 className="w-4 h-4" />
+                </button>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {showAdd && (
+        <Modal open onClose={() => setShowAdd(false)} title="إضافة رسوم جديدة">
+          <div className="space-y-4">
+            <div>
+              <label className="label">الوصف</label>
+              <input value={newDesc} onChange={(e) => setNewDesc(e.target.value)} className="input" placeholder="مثال: حجز ملعب" />
+            </div>
+            <div>
+              <label className="label">المبلغ ($)</label>
+              <input type="number" step="0.01" value={newAmount} onChange={(e) => setNewAmount(e.target.value)} className="input" placeholder="2.00" />
+            </div>
+            <button onClick={addDue} disabled={!newDesc || !newAmount} className="btn btn-primary w-full">
+              <Save className="w-4 h-4" />
+              حفظ
+            </button>
+          </div>
+        </Modal>
+      )}
+    </div>
+  );
+}
+
+// ============ SETTINGS ============
+function SettingsTab() {
+  const { session } = useAuth();
+  const [newPassword, setNewPassword] = useState('');
+  const [message, setMessage] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const updatePassword = async () => {
+    setMessage(null);
+    setError(null);
+    if (newPassword.length < 6) {
+      setError('كلمة المرور يجب أن تكون 6 أحرف على الأقل');
+      return;
+    }
+    const { error: err } = await supabase.auth.updateUser({ password: newPassword });
+    if (err) {
+      setError(err.message);
+    } else {
+      setMessage('تم تحديث كلمة المرور بنجاح');
+      setNewPassword('');
+    }
+  };
+
+  return (
+    <div className="max-w-md space-y-4">
+      <h3 className="text-lg font-bold text-forest-900">الإعدادات</h3>
+      <div className="card">
+        <h4 className="font-bold text-forest-900 mb-2">تغيير كلمة المرور</h4>
+        <p className="text-sm text-charcoal-500 mb-4">البريد: {session?.user?.email}</p>
+        <div className="space-y-3">
+          <div>
+            <label className="label">كلمة المرور الجديدة</label>
+            <input type="password" value={newPassword} onChange={(e) => setNewPassword(e.target.value)} className="input" />
+          </div>
+          {error && <p className="text-sm text-red-600">{error}</p>}
+          {message && <p className="text-sm text-green-600">{message}</p>}
+          <button onClick={updatePassword} disabled={!newPassword} className="btn btn-primary w-full">
+            <Save className="w-4 h-4" />
+            تحديث
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}

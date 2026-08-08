@@ -1,0 +1,72 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html {
+    direction: rtl;
+  }
+  body {
+    font-family: 'Tajawal', sans-serif;
+    background-color: #FDFBF7;
+    color: #1A1A1A;
+  }
+  h1, h2, h3, h4, h5 {
+    font-family: 'Cairo', sans-serif;
+    font-weight: 700;
+  }
+}
+
+@layer components {
+  .btn {
+    @apply inline-flex items-center justify-center gap-2 rounded-xl font-medium transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed;
+  }
+  .btn-primary {
+    @apply bg-forest-800 text-cream-50 px-5 py-2.5 hover:bg-forest-700 active:scale-95;
+  }
+  .btn-gold {
+    @apply bg-gold-400 text-forest-900 px-5 py-2.5 hover:bg-gold-300 active:scale-95 font-bold;
+  }
+  .btn-outline {
+    @apply border-2 border-forest-200 text-forest-800 px-5 py-2.5 hover:bg-forest-50 active:scale-95;
+  }
+  .btn-danger {
+    @apply bg-red-600 text-white px-5 py-2.5 hover:bg-red-700 active:scale-95;
+  }
+  .card {
+    @apply bg-white rounded-2xl shadow-card p-6;
+  }
+  .input {
+    @apply w-full rounded-xl border border-cream-300 bg-cream-50 px-4 py-2.5 text-charcoal-800 outline-none transition-all focus:border-forest-500 focus:ring-2 focus:ring-forest-200;
+  }
+  .label {
+    @apply block text-sm font-medium text-charcoal-700 mb-1.5;
+  }
+  .badge {
+    @apply inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-medium;
+  }
+}
+
+/* Custom scrollbar */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-track {
+  background: #F5F0EB;
+}
+::-webkit-scrollbar-thumb {
+  background: #1B3B2B;
+  border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #132E20;
+}
+
+/* Star partial fill gradient */
+.star-fill {
+  background: linear-gradient(to left, #D4AF37 var(--fill), #E0D5C8 var(--fill));
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
