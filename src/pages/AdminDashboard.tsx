@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback, useRef } from 'react';
-import { Users, ClipboardCheck, GraduationCap, Star, DollarSign, QrCode, Settings, CircleCheck as CheckCircle, Circle as XCircle, Clock, Plus, Trash2, CreditCard as Edit, Save, X, ScanLine, Calendar, MapPin, Award, BookOpen, Trophy, Play, Pause, TriangleAlert as AlertTriangle, StickyNote } from 'lucide-react';
+import { Users, ClipboardCheck, GraduationCap, Star, DollarSign, QrCode, Settings, CircleCheck as CheckCircle, Circle as XCircle, Clock, Plus, Trash2, Edit, Save, X, ScanLine, Calendar, MapPin, Award, BookOpen, Trophy, Play, Pause, TriangleAlert as AlertTriangle, StickyNote } from 'lucide-react';
 import { supabase } from '@/lib/supabase';
 import { useAuth } from '@/lib/auth';
 import { DashboardLayout } from '@/components/DashboardLayout';
@@ -10,7 +10,7 @@ import { computeStarFills, getCurrentWeekYear, getCategoryStars } from '@/lib/sc
 import { generateQrPayload, sessionSecret } from '@/lib/qr';
 import { createNotification } from '@/lib/notifications';
 import { formatDateArabic, formatTimeArabic } from '@/lib/date';
-import type { Profile, Course, Category, Evaluation, Session, FinancialDue, Task, Attendance, StudentNote } from '@/lib/types';
+import type { Profile, Course, Category, Evaluation, Session, FinancialDue, Task, Attendance, StudentNote, NoteType } from '@/lib/types';
 import QRCode from 'qrcode';
 
 type Tab = 'overview' | 'approvals' | 'students' | 'courses' | 'attendance' | 'evaluations' | 'financial' | 'categories' | 'settings';
@@ -227,14 +227,24 @@ function ApprovalsTab() {
 
 // ============ USERS (all profiles) ============
 // ============ STUDENT NOTES ============
-function StudentNotesSection({ studentId }: { studentId: string }) {
+function StudentNotesSection({ studentId, courses }: { studentId: string; courses: Course[] }) {
   const [notes, setNotes] = useState<StudentNote[]>([]);
   const [newNote, setNewNote] = useState('');
+  const [newCourseId, setNewCourseId] = useState<string>('');
+  const [newPointsImpact, setNewPointsImpact] = useState<string>('0');
+  const [newExcused, setNewExcused] = useState(false);
+  const [newNoteType, setNewNoteType] = useState<NoteType>('supervisor');
   const [saving, setSaving] = useState(false);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editNote, setEditNote] = useState('');
+  const [editCourseId, setEditCourseId] = useState<string>('');
+  const [editPointsImpact, setEditPointsImpact] = useState<string>('0');
+  const [editExcused, setEditExcused] = useState(false);
+  const [editSaving, setEditSaving] = useState(false);
 
   const load = useCallback(async () => {
     const { data } = await supabase.from('student_notes')
-      .select('*').eq('student_id', studentId).order('created_at', { ascending: false });
+      .select('*, course:courses(*)').eq('student_id', studentId).order('created_at', { ascending: false });
     setNotes(data as StudentNote[] || []);
   }, [studentId]);
 
@@ -243,12 +253,20 @@ function StudentNotesSection({ studentId }: { studentId: string }) {
   const addNote = async () => {
     if (!newNote.trim()) return;
     setSaving(true);
+    const impact = newExcused ? 0 : (parseInt(newPointsImpact) || 0);
     await supabase.from('student_notes').insert({
       student_id: studentId,
       note: newNote.trim(),
-      note_type: 'supervisor',
+      note_type: newNoteType,
+      course_id: newCourseId || null,
+      points_impact: impact,
+      excused: newExcused,
     });
     setNewNote('');
+    setNewCourseId('');
+    setNewPointsImpact('0');
+    setNewExcused(false);
+    setNewNoteType('supervisor');
     setSaving(false);
     load();
   };
@@ -258,10 +276,43 @@ function StudentNotesSection({ studentId }: { studentId: string }) {
     load();
   };
 
+  const startEdit = (n: StudentNote) => {
+    setEditingId(n.id);
+    setEditNote(n.note);
+    setEditCourseId(n.course_id || '');
+    setEditPointsImpact(String(n.points_impact || 0));
+    setEditExcused(n.excused || false);
+  };
+
+  const cancelEdit = () => {
+    setEditingId(null);
+    setEditNote('');
+    setEditCourseId('');
+    setEditPointsImpact('0');
+    setEditExcused(false);
+  };
+
+  const saveEdit = async (id: string) => {
+    if (!editNote.trim()) return;
+    setEditSaving(true);
+    const impact = editExcused ? 0 : (parseInt(editPointsImpact) || 0);
+    await supabase.from('student_notes').update({
+      note: editNote.trim(),
+      course_id: editCourseId || null,
+      points_impact: impact,
+      excused: editExcused,
+    }).eq('id', id);
+    setEditSaving(false);
+    cancelEdit();
+    load();
+  };
+
   const typeLabels: Record<string, { label: string; color: string }> = {
     supervisor: { label: 'ملاحظة مشرف', color: 'bg-blue-100 text-blue-700' },
     absence: { label: 'غياب تلقائي', color: 'bg-red-100 text-red-700' },
     general: { label: 'عامة', color: 'bg-cream-100 text-charcoal-600' },
+    excuse: { label: 'غياب بعذر', color: 'bg-gold-100 text-gold-700' },
+    custom: { label: 'مخصصة', color: 'bg-forest-100 text-forest-700' },
   };
 
   return (
@@ -271,36 +322,156 @@ function StudentNotesSection({ studentId }: { studentId: string }) {
         <h4 className="font-bold text-forest-900">الملاحظات والغياب</h4>
       </div>
 
-      <div className="flex gap-2 mb-3">
-        <input
-          value={newNote}
-          onChange={(e) => setNewNote(e.target.value)}
-          className="input flex-1"
-          placeholder="أضف ملاحظة كمشرف..."
-          onKeyDown={(e) => e.key === 'Enter' && addNote()}
-        />
-        <button onClick={addNote} disabled={saving || !newNote.trim()} className="btn btn-primary text-sm disabled:opacity-50">
-          <Plus className="w-4 h-4" />
-        </button>
+      {/* Add Note Form */}
+      <div className="space-y-3 mb-4 p-4 rounded-xl bg-cream-50 border border-cream-200">
+        <div className="grid grid-cols-2 gap-3">
+          <div>
+            <label className="label">نوع الملاحظة</label>
+            <select value={newNoteType} onChange={(e) => setNewNoteType(e.target.value as NoteType)} className="input">
+              <option value="supervisor">ملاحظة مشرف</option>
+              <option value="absence">غياب</option>
+              <option value="excuse">غياب بعذر</option>
+              <option value="custom">مخصصة</option>
+              <option value="general">عامة</option>
+            </select>
+          </div>
+          <div>
+            <label className="label">الدورة (اختياري)</label>
+            <select value={newCourseId} onChange={(e) => setNewCourseId(e.target.value)} className="input">
+              <option value="">— بدون —</option>
+              {courses.map((c) => <option key={c.id} value={c.id}>{c.title}</option>)}
+            </select>
+          </div>
+        </div>
+        <div>
+          <label className="label">الملاحظة</label>
+          <input
+            value={newNote}
+            onChange={(e) => setNewNote(e.target.value)}
+            className="input"
+            placeholder="أضف ملاحظة كمشرف..."
+            onKeyDown={(e) => e.key === 'Enter' && addNote()}
+          />
+        </div>
+        <div className="flex flex-wrap items-end gap-3">
+          <div className="flex-1 min-w-[120px]">
+            <label className="label">تأثير النقاط (− أو +)</label>
+            <input
+              type="number"
+              value={newPointsImpact}
+              onChange={(e) => setNewPointsImpact(e.target.value)}
+              disabled={newExcused}
+              className="input disabled:opacity-50"
+              placeholder="مثال: -5 أو +5"
+            />
+          </div>
+          <label className={`flex items-center gap-2 cursor-pointer p-2.5 rounded-xl border transition-all ${newExcused ? 'bg-gold-100 border-gold-300' : 'bg-white border-cream-200'}`}>
+            <input
+              type="checkbox"
+              checked={newExcused}
+              onChange={(e) => {
+                setNewExcused(e.target.checked);
+                if (e.target.checked) setNewPointsImpact('0');
+              }}
+              className="w-5 h-5 accent-gold-500"
+            />
+            <span className="text-sm font-medium text-charcoal-700">غياب بعذر</span>
+          </label>
+          <button onClick={addNote} disabled={saving || !newNote.trim()} className="btn btn-primary text-sm disabled:opacity-50">
+            <Plus className="w-4 h-4" />
+            إضافة
+          </button>
+        </div>
       </div>
 
-      <div className="space-y-2 max-h-40 overflow-y-auto">
+      {/* Notes List */}
+      <div className="space-y-2 max-h-60 overflow-y-auto">
         {notes.length === 0 ? (
           <p className="text-sm text-charcoal-400">لا توجد ملاحظات</p>
         ) : notes.map((n) => (
-          <div key={n.id} className="flex items-start gap-2 p-3 rounded-xl bg-cream-50">
-            <div className="flex-1">
-              <div className="flex items-center gap-2 mb-1">
-                <span className={`text-xs font-bold px-2 py-0.5 rounded-full ${typeLabels[n.note_type]?.color || typeLabels.general.color}`}>
-                  {typeLabels[n.note_type]?.label || 'عامة'}
-                </span>
-                <span className="text-xs text-charcoal-400">{formatDateArabic(n.created_at)}</span>
+          <div key={n.id} className="p-3 rounded-xl bg-cream-50">
+            {editingId === n.id ? (
+              /* Edit Mode */
+              <div className="space-y-3">
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="label">الدورة</label>
+                    <select value={editCourseId} onChange={(e) => setEditCourseId(e.target.value)} className="input">
+                      <option value="">— بدون —</option>
+                      {courses.map((c) => <option key={c.id} value={c.id}>{c.title}</option>)}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="label">تأثير النقاط</label>
+                    <input
+                      type="number"
+                      value={editPointsImpact}
+                      onChange={(e) => setEditPointsImpact(e.target.value)}
+                      disabled={editExcused}
+                      className="input disabled:opacity-50"
+                    />
+                  </div>
+                </div>
+                <div>
+                  <label className="label">الملاحظة</label>
+                  <input value={editNote} onChange={(e) => setEditNote(e.target.value)} className="input" />
+                </div>
+                <label className={`flex items-center gap-2 cursor-pointer p-2.5 rounded-xl border transition-all w-fit ${editExcused ? 'bg-gold-100 border-gold-300' : 'bg-white border-cream-200'}`}>
+                  <input
+                    type="checkbox"
+                    checked={editExcused}
+                    onChange={(e) => {
+                      setEditExcused(e.target.checked);
+                      if (e.target.checked) setEditPointsImpact('0');
+                    }}
+                    className="w-5 h-5 accent-gold-500"
+                  />
+                  <span className="text-sm font-medium text-charcoal-700">غياب بعذر</span>
+                </label>
+                <div className="flex gap-2">
+                  <button onClick={() => saveEdit(n.id)} disabled={editSaving || !editNote.trim()} className="btn btn-primary text-sm disabled:opacity-50">
+                    <Save className="w-4 h-4" />
+                    حفظ
+                  </button>
+                  <button onClick={cancelEdit} className="btn btn-outline text-sm">
+                    <X className="w-4 h-4" />
+                    إلغاء
+                  </button>
+                </div>
               </div>
-              <p className="text-sm text-charcoal-700">{n.note}</p>
-            </div>
-            <button onClick={() => deleteNote(n.id)} className="text-charcoal-400 hover:text-red-500">
-              <Trash2 className="w-4 h-4" />
-            </button>
+            ) : (
+              /* View Mode */
+              <div className="flex items-start gap-2">
+                <div className="flex-1">
+                  <div className="flex items-center gap-2 mb-1 flex-wrap">
+                    <span className={`text-xs font-bold px-2 py-0.5 rounded-full ${typeLabels[n.note_type]?.color || typeLabels.general.color}`}>
+                      {typeLabels[n.note_type]?.label || 'عامة'}
+                    </span>
+                    {n.course && (
+                      <span className="text-xs text-forest-600 font-medium">{n.course.title}</span>
+                    )}
+                    {n.excused && (
+                      <span className="text-xs font-bold px-2 py-0.5 rounded-full bg-gold-100 text-gold-700">معذور</span>
+                    )}
+                    {n.points_impact !== 0 && !n.excused && (
+                      <span className={`text-xs font-bold px-2 py-0.5 rounded-full ${n.points_impact < 0 ? 'bg-red-100 text-red-700' : 'bg-green-100 text-green-700'}`}>
+                        {n.points_impact > 0 ? `+${n.points_impact}` : n.points_impact} نقطة
+                      </span>
+                    )}
+                    <span className="text-xs text-charcoal-400">{formatDateArabic(n.created_at)}</span>
+                  </div>
+                  <p className="text-sm text-charcoal-700">{n.note}</p>
+                </div>
+                <div className="flex gap-1">
+                  <button onClick={() => startEdit(n)} className="text-charcoal-400 hover:text-forest-600 p-1">
+                    <Edit className="w-4 h-4" />
+                  </button>
+                  <button onClick={() => deleteNote(n.id)} className="text-charcoal-400 hover:text-red-500 p-1">
+                    <Trash2 className="w-4 h-4" />
+                  </button>
+                </div>
+              </div>
+            )}
           </div>
         ))}
       </div>
@@ -508,7 +679,7 @@ function StudentsTab() {
 
             {/* Student notes (supervisor + auto-absence) */}
             {selected.role === 'student' && (
-              <StudentNotesSection studentId={selected.id} />
+              <StudentNotesSection studentId={selected.id} courses={courses} />
             )}
           </div>
         )}
