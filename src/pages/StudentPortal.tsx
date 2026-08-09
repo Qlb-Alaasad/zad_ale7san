@@ -7,10 +7,10 @@ import { DashboardLayout } from '@/components/DashboardLayout';
 import { Modal } from '@/components/Modal';
 import { Loading, EmptyState, Badge } from '@/components/ui';
 import { StarRating } from '@/components/StarRating';
-import { computeStarFills, getCategoryStars, getCurrentWeekYear } from '@/lib/scoring';
+import { computeStarFills, getCategoryStars, getCurrentWeekYear, computeCoursePoints } from '@/lib/scoring';
 import { verifyQrPayload, sessionSecret } from '@/lib/qr';
 import { formatDateArabic, formatTimeArabic } from '@/lib/date';
-import type { Category, Evaluation, Session, FinancialDue, Task, Attendance, StudentNote } from '@/lib/types';
+import type { Category, Evaluation, Session, FinancialDue, Task, Attendance, StudentNote, Course, AppSettings } from '@/lib/types';
 
 export default function StudentPortal() {
   const { profile, session } = useAuth();
@@ -22,6 +22,10 @@ export default function StudentPortal() {
   const [tasks, setTasks] = useState<Task[]>([]);
   const [attendance, setAttendance] = useState<Attendance[]>([]);
   const [notes, setNotes] = useState<StudentNote[]>([]);
+  const [courses, setCourses] = useState<Course[]>([]);
+  const [enrolledCourses, setEnrolledCourses] = useState<Course[]>([]);
+  const [coursePoints, setCoursePoints] = useState<Record<string, number>>({});
+  const [basePoints, setBasePoints] = useState(100);
   const [loading, setLoading] = useState(true);
   const [scannerOpen, setScannerOpen] = useState(false);
   const [scanResult, setScanResult] = useState<{ success: boolean; message: string } | null>(null);
@@ -33,7 +37,7 @@ export default function StudentPortal() {
 
   const load = useCallback(async () => {
     if (!profile) return;
-    const [cats, evals, allEvals, sess, duesData, tasksData, attData, notesData] = await Promise.all([
+    const [cats, evals, allEvals, sess, duesData, tasksData, attData, notesData, courseData, enrollData, settingsData] = await Promise.all([
       supabase.from('categories').select('*').order('name'),
       supabase.from('evaluations').select('*, category:category(*)').eq('student_id', profile.id).eq('week_number', weekNumber).eq('year', year),
       supabase.from('evaluations').select('*, category:category(*)').eq('student_id', profile.id).order('created_at', { ascending: false }),
@@ -42,6 +46,9 @@ export default function StudentPortal() {
       supabase.from('tasks').select('*').eq('student_id', profile.id).order('created_at', { ascending: false }),
       supabase.from('attendance').select('*, session:session(*)').eq('student_id', profile.id).order('created_at', { ascending: false }),
       supabase.from('student_notes').select('*').eq('student_id', profile.id).order('created_at', { ascending: false }),
+      supabase.from('courses').select('*').order('title'),
+      supabase.from('student_courses').select('course_id').eq('student_id', profile.id),
+      supabase.from('settings').select('*').eq('id', 1).maybeSingle(),
     ]);
     setCategories(cats.data as Category[] || []);
     setEvaluations(evals.data as Evaluation[] || []);
@@ -51,6 +58,21 @@ export default function StudentPortal() {
     setTasks(tasksData.data as Task[] || []);
     setAttendance(attData.data as Attendance[] || []);
     setNotes(notesData.data as StudentNote[] || []);
+    const allCourses = courseData.data as Course[] || [];
+    setCourses(allCourses);
+    const enrolledIds = (enrollData.data || []).map((e: any) => e.course_id);
+    const enrolled = allCourses.filter((c) => enrolledIds.includes(c.id));
+    setEnrolledCourses(enrolled);
+    if (settingsData) setBasePoints((settingsData as AppSettings).base_points);
+    // Compute per-course points
+    const evalsAll = (allEvals.data as Evaluation[]) || [];
+    const notesAll = (notesData.data as StudentNote[]) || [];
+    const pointsMap: Record<string, number> = {};
+    const bp = settingsData ? (settingsData as AppSettings).base_points : 100;
+    for (const c of enrolled) {
+      pointsMap[c.id] = computeCoursePoints(c.id, bp, evalsAll, notesAll);
+    }
+    setCoursePoints(pointsMap);
     setLoading(false);
   }, [profile, weekNumber, year]);
 
@@ -176,7 +198,15 @@ export default function StudentPortal() {
   const totalUnpaid = dues.filter((d) => d.status === 'unpaid').reduce((s, d) => s + Number(d.amount), 0);
   const upcomingSessions = sessions.filter((s) => s.session_type === 'match' || s.session_type === 'event').slice(0, 5);
   const recentAttendance = attendance.slice(0, 5);
-  const supervisorNotes = notes.filter((n) => n.note_type === 'supervisor' || n.note_type === 'absence').slice(0, 10);
+  const supervisorNotes = notes.filter((n) => n.note_type === 'supervisor' || n.note_type === 'absence' || n.note_type === 'excuse' || n.note_type === 'custom').slice(0, 10);
+
+  const noteTypeLabels: Record<string, { label: string; color: string }> = {
+    supervisor: { label: 'ملاحظة مشرف', color: 'bg-blue-100 text-blue-700' },
+    absence: { label: 'غياب تلقائي', color: 'bg-red-100 text-red-700' },
+    general: { label: 'عامة', color: 'bg-cream-100 text-charcoal-600' },
+    excuse: { label: 'غياب بعذر', color: 'bg-gold-100 text-gold-700' },
+    custom: { label: 'مخصصة', color: 'bg-forest-100 text-forest-700' },
+  };
 
   return (
     <DashboardLayout navItems={[{ path: '/portal', label: 'البوابة', icon: <BookOpen className="w-5 h-5" /> }]}>
@@ -194,6 +224,44 @@ export default function StudentPortal() {
         <QrCode className="w-5 h-5" />
         مسح رمز الحضور
       </button>
+
+      {/* My Courses with Points */}
+      {enrolledCourses.length > 0 && (
+        <div className="mb-6">
+          <div className="flex items-center gap-2 mb-3">
+            <BookOpen className="w-5 h-5 text-forest-700" />
+            <h2 className="text-lg font-bold text-forest-900">دوراتي ونقاطي</h2>
+          </div>
+          <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-3">
+            {enrolledCourses.map((c) => {
+              const pts = coursePoints[c.id];
+              const hasPts = pts !== undefined;
+              const ptsColor = !hasPts ? '' : pts >= 90 ? 'bg-green-100 text-green-700' : pts >= 70 ? 'bg-gold-100 text-gold-700' : 'bg-red-100 text-red-700';
+              return (
+                <div key={c.id} className="card">
+                  <div className="flex items-center justify-between mb-2">
+                    <p className="font-bold text-forest-900 text-sm">{c.title}</p>
+                    {hasPts && (
+                      <span className={`text-xs font-bold px-2 py-0.5 rounded-full ${ptsColor}`}>
+                        {pts}/{basePoints} نقطة
+                      </span>
+                    )}
+                  </div>
+                  <p className="text-xs text-charcoal-400">{c.schedule_days?.join(' • ') || c.schedule}</p>
+                  {hasPts && (
+                    <div className="mt-2 h-2 bg-cream-200 rounded-full overflow-hidden">
+                      <div
+                        className={`h-full rounded-full transition-all duration-500 ${pts >= 90 ? 'bg-green-500' : pts >= 70 ? 'bg-gold-500' : 'bg-red-500'}`}
+                        style={{ width: `${Math.min(100, (pts / basePoints) * 100)}%` }}
+                      />
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
 
       {/* Star ratings */}
       <div className="mb-6">
@@ -318,11 +386,24 @@ export default function StudentPortal() {
             </div>
             <div className="space-y-2">
               {supervisorNotes.map((n) => (
-                <div key={n.id} className={`flex items-start gap-2 p-3 rounded-xl ${n.note_type === 'absence' ? 'bg-red-50' : 'bg-cream-50'}`}>
-                  {n.note_type === 'absence' ? <AlertCircle className="w-4 h-4 text-red-500 mt-0.5 shrink-0" /> : <StickyNote className="w-4 h-4 text-forest-600 mt-0.5 shrink-0" />}
-                  <div>
+                <div key={n.id} className={`flex items-start gap-2 p-3 rounded-xl ${n.note_type === 'absence' ? 'bg-red-50' : n.note_type === 'excuse' ? 'bg-gold-50' : 'bg-cream-50'}`}>
+                  {n.note_type === 'absence' ? <AlertCircle className="w-4 h-4 text-red-500 mt-0.5 shrink-0" /> : n.note_type === 'excuse' ? <CheckCircle className="w-4 h-4 text-gold-600 mt-0.5 shrink-0" /> : <StickyNote className="w-4 h-4 text-forest-600 mt-0.5 shrink-0" />}
+                  <div className="flex-1">
+                    <div className="flex items-center gap-2 mb-1 flex-wrap">
+                      <span className={`text-xs font-bold px-2 py-0.5 rounded-full ${noteTypeLabels[n.note_type]?.color || noteTypeLabels.general.color}`}>
+                        {noteTypeLabels[n.note_type]?.label || 'عامة'}
+                      </span>
+                      {n.excused && (
+                        <span className="text-xs font-bold px-2 py-0.5 rounded-full bg-gold-100 text-gold-700">معذور</span>
+                      )}
+                      {n.points_impact !== 0 && !n.excused && (
+                        <span className={`text-xs font-bold px-2 py-0.5 rounded-full ${n.points_impact < 0 ? 'bg-red-100 text-red-700' : 'bg-green-100 text-green-700'}`}>
+                          {n.points_impact > 0 ? `+${n.points_impact}` : n.points_impact} نقطة
+                        </span>
+                      )}
+                      <span className="text-xs text-charcoal-400">{formatDateArabic(n.created_at)}</span>
+                    </div>
                     <p className="text-sm text-charcoal-700">{n.note}</p>
-                    <p className="text-xs text-charcoal-400 mt-0.5">{formatDateArabic(n.created_at)}</p>
                   </div>
                 </div>
               ))}

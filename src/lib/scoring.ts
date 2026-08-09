@@ -1,4 +1,4 @@
-import type { Category, Evaluation } from './types';
+import type { Category, Evaluation, StudentNote } from './types';
 
 /**
  * Compute the fill ratio (0..1) for each of 5 stars given points_deducted and max_points.
@@ -55,4 +55,28 @@ export function getCategoryStars(
     const deducted = ev?.points_deducted ?? 0;
     return { category: cat, fills: computeStarFills(deducted, cat.max_points), pointsDeducted: deducted };
   });
+}
+
+/**
+ * Compute a student's current points for a specific course.
+ * Starts from basePoints, subtracts deductions from evaluations (for that course),
+ * and applies points_impact from student_notes linked to that course (unless excused).
+ * Returns a value clamped to >= 0.
+ */
+export function computeCoursePoints(
+  courseId: string,
+  basePoints: number,
+  evaluations: Evaluation[],
+  notes: StudentNote[]
+): number {
+  const evalDeduction = evaluations
+    .filter((e) => e.course_id === courseId)
+    .reduce((sum, e) => sum + (e.points_deducted || 0), 0);
+
+  const noteImpact = notes
+    .filter((n) => n.course_id === courseId && !n.excused)
+    .reduce((sum, n) => sum + (n.points_impact || 0), 0);
+
+  const points = basePoints - evalDeduction + noteImpact;
+  return Math.max(0, Math.round(points));
 }

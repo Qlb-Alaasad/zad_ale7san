@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback, useRef } from 'react';
-import { Users, ClipboardCheck, GraduationCap, Star, DollarSign, QrCode, Settings, CircleCheck as CheckCircle, Circle as XCircle, Clock, Plus, Trash2, Edit, Save, X, ScanLine, Calendar, MapPin, Award, BookOpen, Trophy, Play, Pause, TriangleAlert as AlertTriangle, StickyNote } from 'lucide-react';
+import { Users, ClipboardCheck, GraduationCap, Star, DollarSign, QrCode, Settings, CircleCheck as CheckCircle, Circle as XCircle, Clock, Plus, Trash2, CreditCard as Edit, Save, X, ScanLine, Calendar, MapPin, Award, BookOpen, Trophy, Play, Pause, TriangleAlert as AlertTriangle, StickyNote } from 'lucide-react';
 import { supabase } from '@/lib/supabase';
 import { useAuth } from '@/lib/auth';
 import { DashboardLayout } from '@/components/DashboardLayout';
