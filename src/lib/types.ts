@@ -50,12 +50,14 @@ export interface Evaluation {
   id: string;
   student_id: string;
   category_id: string;
+  course_id: string | null;
   week_number: number;
   year: number;
   points_deducted: number;
   note: string;
   created_at: string;
   category?: Category;
+  course?: Course;
 }
 
 export interface Session {
@@ -120,7 +122,7 @@ export interface QrToken {
   created_at: string;
 }
 
-export type NoteType = 'supervisor' | 'absence' | 'general';
+export type NoteType = 'supervisor' | 'absence' | 'general' | 'excuse' | 'custom';
 
 export interface StudentNote {
   id: string;
@@ -129,5 +131,15 @@ export interface StudentNote {
   session_id: string | null;
   note: string;
   note_type: NoteType;
+  points_impact: number;
+  excused: boolean;
   created_at: string;
+  course?: Course;
+}
+
+export interface AppSettings {
+  id: number;
+  base_points: number;
+  absence_deduction: number;
+  updated_at: string;
 }
