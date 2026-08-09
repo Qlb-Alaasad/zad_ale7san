@@ -25,7 +25,10 @@ export default function StudentPortal() {
   const [loading, setLoading] = useState(true);
   const [scannerOpen, setScannerOpen] = useState(false);
   const [scanResult, setScanResult] = useState<{ success: boolean; message: string } | null>(null);
+  const [showSuccessOverlay, setShowSuccessOverlay] = useState(false);
   const scannerRef = useRef<Html5Qrcode | null>(null);
+  const isScanningPaused = useRef(false);
+  const cooldownTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const { weekNumber, year } = getCurrentWeekYear();
 
   const load = useCallback(async () => {
@@ -70,6 +73,8 @@ export default function StudentPortal() {
   const startScanner = async () => {
     setScannerOpen(true);
     setScanResult(null);
+    setShowSuccessOverlay(false);
+    isScanningPaused.current = false;
     setTimeout(async () => {
       try {
         const html5Qr = new Html5Qrcode('qr-reader');
@@ -89,6 +94,12 @@ export default function StudentPortal() {
   };
 
   const stopScanner = async () => {
+    if (cooldownTimerRef.current) {
+      clearTimeout(cooldownTimerRef.current);
+      cooldownTimerRef.current = null;
+    }
+    isScanningPaused.current = false;
+    setShowSuccessOverlay(false);
     if (scannerRef.current) {
       try {
         await scannerRef.current.stop();
@@ -101,12 +112,15 @@ export default function StudentPortal() {
 
   const handleScan = async (payload: string) => {
     if (!profile) return;
+    if (isScanningPaused.current) return;
+    isScanningPaused.current = true;
     try {
       const parsed = JSON.parse(payload);
       const sid = parsed.s as string;
       const verifyResult = await verifyQrPayload(payload, sessionSecret(sid));
       if (!verifyResult.valid || !verifyResult.sessionId) {
         setScanResult({ success: false, message: 'رمز غير صالح أو منتهي الصلاحية' });
+        isScanningPaused.current = false;
         return;
       }
       const sessionId = verifyResult.sessionId;
@@ -114,19 +128,21 @@ export default function StudentPortal() {
       const { data: existing } = await supabase.from('attendance').select('*').eq('student_id', profile.id).eq('session_id', sessionId).maybeSingle();
       if (existing) {
         setScanResult({ success: false, message: 'تم تسجيل حضورك مسبقاً لهذه الحصة' });
-        await stopScanner();
+        isScanningPaused.current = false;
         return;
       }
       // Check if late (after start time + 15 min)
       const { data: session } = await supabase.from('sessions').select('*').eq('id', sessionId).maybeSingle();
       if (!session) {
         setScanResult({ success: false, message: 'الحصة غير موجودة' });
+        isScanningPaused.current = false;
         return;
       }
       const now = new Date();
       const start = new Date(session.start_time);
       if (!session.is_active) {
         setScanResult({ success: false, message: 'الحصة غير نشطة حالياً. اطلب من الشيخ تفعيلها.' });
+        isScanningPaused.current = false;
         return;
       }
       const lateThreshold = new Date(start.getTime() + 15 * 60000);
@@ -138,11 +154,19 @@ export default function StudentPortal() {
         status,
         points_deducted: pointsDeducted,
       });
-      setScanResult({ success: true, message: status === 'late' ? 'تم تسجيل حضورك (متأخر)' : 'تم تسجيل حضورك بنجاح' });
-      await stopScanner();
+      const successMessage = status === 'late' ? 'تم تسجيل حضورك (متأخر)' : 'تم تسجيل الحضور بنجاح';
+      setScanResult({ success: true, message: successMessage });
+      setShowSuccessOverlay(true);
       load();
+      cooldownTimerRef.current = setTimeout(() => {
+        setShowSuccessOverlay(false);
+        setScanResult(null);
+        isScanningPaused.current = false;
+        cooldownTimerRef.current = null;
+      }, 5000);
     } catch {
       setScanResult({ success: false, message: 'رمز غير صالح' });
+      isScanningPaused.current = false;
     }
   };
 
@@ -361,15 +385,30 @@ export default function StudentPortal() {
       {/* Scanner Modal */}
       <Modal open={scannerOpen} onClose={stopScanner} title="مسح رمز الحضور" size="sm">
         <div className="space-y-4">
-          {scanResult ? (
-            <div className={`flex items-center gap-3 p-4 rounded-xl ${scanResult.success ? 'bg-green-50 text-green-700' : 'bg-red-50 text-red-700'}`}>
+          {!scanResult && (
+            <p className="text-sm text-charcoal-500 text-center">وجّه كاميرا هاتفك نحو رمز QR المعروض على شاشة الشيخ</p>
+          )}
+          <div className="relative w-full rounded-xl overflow-hidden bg-forest-950">
+            <div id="qr-reader" className="w-full" />
+            {showSuccessOverlay && (
+              <div className="absolute inset-0 flex flex-col items-center justify-center bg-forest-950/80 backdrop-blur-sm animate-overlay-in z-10">
+                <div className="w-20 h-20 rounded-full bg-green-500 flex items-center justify-center mb-4 animate-check-pop shadow-lg shadow-green-500/50">
+                  <CheckCircle className="w-12 h-12 text-white" />
+                </div>
+                <p className="text-lg font-bold text-white text-center px-4">تم تسجيل الحضور بنجاح</p>
+                <p className="text-sm text-green-300 mt-1">يمكنك مسح رمز آخر بعد قليل</p>
+                <div className="mt-4 w-32 h-1 bg-forest-800 rounded-full overflow-hidden">
+                  <div className="h-full bg-green-500 rounded-full animate-[shrink_5s_linear_forwards]" style={{ animation: 'shrinkBar 5s linear forwards' }} />
+                </div>
+              </div>
+            )}
+          </div>
+          {scanResult && !showSuccessOverlay && (
+            <div className={`flex items-center gap-3 p-4 rounded-xl animate-fade-in ${scanResult.success ? 'bg-green-50 text-green-700' : 'bg-red-50 text-red-700'}`}>
               {scanResult.success ? <CheckCircle className="w-5 h-5" /> : <AlertCircle className="w-5 h-5" />}
               <p className="text-sm font-medium">{scanResult.message}</p>
             </div>
-          ) : (
-            <p className="text-sm text-charcoal-500 text-center">وجّه كاميرا هاتفك نحو رمز QR المعروض على شاشة الشيخ</p>
           )}
-          <div id="qr-reader" className="w-full rounded-xl overflow-hidden bg-forest-950" />
           <button onClick={stopScanner} className="btn btn-outline w-full">
             <X className="w-4 h-4" />
             إغلاق

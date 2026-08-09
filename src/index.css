@@ -70,3 +70,9 @@
   background-clip: text;
   -webkit-text-fill-color: transparent;
 }
+
+/* QR scan success cooldown progress bar */
+@keyframes shrinkBar {
+  from { width: 100%; }
+  to { width: 0%; }
+}
