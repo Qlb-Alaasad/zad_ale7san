@@ -63,6 +63,7 @@ export interface Evaluation {
 export interface Session {
   id: string;
   course_id: string | null;
+  category_id: string | null;
   title: string;
   description: string;
   session_type: SessionType;
@@ -87,6 +88,7 @@ export interface Attendance {
 export interface FinancialDue {
   id: string;
   student_id: string;
+  category_id: string | null;
   description: string;
   amount: number;
   status: DueStatus;
@@ -96,6 +98,7 @@ export interface FinancialDue {
 export interface Task {
   id: string;
   student_id: string;
+  category_id: string | null;
   title: string;
   description: string;
   due_date: string | null;

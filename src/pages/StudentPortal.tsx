@@ -58,7 +58,7 @@ export default function StudentPortal() {
     const filteredAllEvals = (allEvals.data as Evaluation[] || []).filter((e) => !e.category_id || enrolledCatIds.has(e.category_id));
     setAllEvaluations(filteredAllEvals);
     setSessions((sess.data as Session[] || []).filter((s) => !s.category_id || enrolledCatIds.has(s.category_id)));
-    setDues(duesData.data as FinancialDue[] || []);
+    setDues((duesData.data as FinancialDue[] || []).filter((d) => !d.category_id || enrolledCatIds.has(d.category_id)));
     setTasks((tasksData.data as Task[] || []).filter((t) => !t.category_id || enrolledCatIds.has(t.category_id)));
     setAttendance(attData.data as Attendance[] || []);
     setNotes(notesData.data as StudentNote[] || []);

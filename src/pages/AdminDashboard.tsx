@@ -1519,6 +1519,7 @@ function CategoriesTab() {
   const [loading, setLoading] = useState(true);
   const [showForm, setShowForm] = useState(false);
   const [editing, setEditing] = useState<Category | null>(null);
+  const [managedCategory, setManagedCategory] = useState<Category | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -1536,6 +1537,10 @@ function CategoriesTab() {
   };
 
   if (loading) return <Loading />;
+
+  if (managedCategory) {
+    return <CategoryManage category={managedCategory} onBack={() => setManagedCategory(null)} />;
+  }
 
   return (
     <div className="space-y-4">
@@ -1556,6 +1561,9 @@ function CategoriesTab() {
                 <Badge color="gold">الحد الأقصى: {c.max_points} نقطة</Badge>
               </div>
               <div className="flex gap-1">
+                <button onClick={() => setManagedCategory(c)} className="p-1.5 rounded-lg hover:bg-forest-50 text-forest-700" title="إدارة المهام والرسوم">
+                  <ClipboardCheck className="w-4 h-4" />
+                </button>
                 <button onClick={() => { setEditing(c); setShowForm(true); }} className="p-1.5 rounded-lg hover:bg-cream-100 text-charcoal-500">
                   <Edit className="w-4 h-4" />
                 </button>
@@ -1568,6 +1576,217 @@ function CategoriesTab() {
         ))}
       </div>
       {showForm && <CategoryForm category={editing} onClose={() => setShowForm(false)} onSaved={() => { setShowForm(false); load(); }} />}
+    </div>
+  );
+}
+
+function CategoryManage({ category, onBack }: { category: Category; onBack: () => void }) {
+  const [students, setStudents] = useState<Profile[]>([]);
+  const [tasks, setTasks] = useState<Task[]>([]);
+  const [dues, setDues] = useState<FinancialDue[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [selectedStudent, setSelectedStudent] = useState<Profile | null>(null);
+  const [newTaskTitle, setNewTaskTitle] = useState('');
+  const [newTaskDesc, setNewTaskDesc] = useState('');
+  const [newTaskDue, setNewTaskDue] = useState('');
+  const [newDueDesc, setNewDueDesc] = useState('');
+  const [newDueAmount, setNewDueAmount] = useState('');
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    const [{ data: catEnrollData }, { data: profileData }, { data: taskData }, { data: dueData }] = await Promise.all([
+      supabase.from('student_categories').select('student_id').eq('category_id', category.id),
+      supabase.from('profiles').select('*').eq('role', 'student').eq('status', 'approved').order('full_name'),
+      supabase.from('tasks').select('*').eq('category_id', category.id).order('created_at', { ascending: false }),
+      supabase.from('financial_dues').select('*').eq('category_id', category.id).order('created_at', { ascending: false }),
+    ]);
+    const enrolledIds = new Set((catEnrollData || []).map((e: any) => e.student_id));
+    setStudents((profileData as Profile[] || []).filter((s) => enrolledIds.has(s.id)));
+    setTasks(taskData as Task[] || []);
+    setDues(dueData as FinancialDue[] || []);
+    setLoading(false);
+  }, [category.id]);
+
+  useEffect(() => { load(); }, [load]);
+
+  const addTask = async () => {
+    if (!selectedStudent || !newTaskTitle) return;
+    await supabase.from('tasks').insert({
+      student_id: selectedStudent.id,
+      category_id: category.id,
+      title: newTaskTitle,
+      description: newTaskDesc,
+      due_date: newTaskDue || null,
+    });
+    await createNotification(selectedStudent.id, 'مهمة جديدة', `${newTaskTitle} — ${category.name}`, 'general');
+    setNewTaskTitle('');
+    setNewTaskDesc('');
+    setNewTaskDue('');
+    load();
+  };
+
+  const toggleTask = async (task: Task) => {
+    await supabase.from('tasks').update({ completed: !task.completed }).eq('id', task.id);
+    load();
+  };
+
+  const deleteTask = async (id: string) => {
+    await supabase.from('tasks').delete().eq('id', id);
+    load();
+  };
+
+  const addDue = async () => {
+    if (!selectedStudent || !newDueDesc || !newDueAmount) return;
+    await supabase.from('financial_dues').insert({
+      student_id: selectedStudent.id,
+      category_id: category.id,
+      description: newDueDesc,
+      amount: parseFloat(newDueAmount),
+    });
+    await createNotification(selectedStudent.id, 'رسوم جديدة', `${newDueDesc}: ${newDueAmount} — ${category.name}`, 'financial');
+    setNewDueDesc('');
+    setNewDueAmount('');
+    load();
+  };
+
+  const togglePaid = async (due: FinancialDue) => {
+    const newStatus = due.status === 'unpaid' ? 'paid' : 'unpaid';
+    await supabase.from('financial_dues').update({ status: newStatus }).eq('id', due.id);
+    load();
+  };
+
+  const deleteDue = async (id: string) => {
+    await supabase.from('financial_dues').delete().eq('id', id);
+    load();
+  };
+
+  if (loading) return <Loading />;
+
+  const studentTasks = selectedStudent ? tasks.filter((t) => t.student_id === selectedStudent.id) : [];
+  const studentDues = selectedStudent ? dues.filter((d) => d.student_id === selectedStudent.id) : [];
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center gap-3">
+        <button onClick={onBack} className="btn btn-outline text-sm">
+          <X className="w-4 h-4" />
+          رجوع
+        </button>
+        <div>
+          <h3 className="text-lg font-bold text-forest-900">{category.name}</h3>
+          <p className="text-sm text-charcoal-500">إدارة المهام والمستحقات المالية لكل طالب</p>
+        </div>
+      </div>
+
+      {students.length === 0 ? (
+        <EmptyState icon={<Users className="w-8 h-8" />} title="لا يوجد طلاب مسجلون في هذه الفئة" />
+      ) : (
+        <div className="grid lg:grid-cols-3 gap-4">
+          {/* Student list */}
+          <div className="space-y-2">
+            <h4 className="font-bold text-forest-900 text-sm mb-2">الطلاب المسجلون</h4>
+            {students.map((s) => (
+              <button
+                key={s.id}
+                onClick={() => setSelectedStudent(s)}
+                className={`w-full text-right p-3 rounded-xl border transition-colors ${selectedStudent?.id === s.id ? 'border-forest-300 bg-forest-50' : 'border-cream-200 hover:bg-cream-50'}`}
+              >
+                <p className="font-medium text-forest-900 text-sm">{s.full_name}</p>
+                <p className="text-xs text-charcoal-400">
+                  {tasks.filter((t) => t.student_id === s.id).length} مهمة • {dues.filter((d) => d.student_id === s.id).length} رسوم
+                </p>
+              </button>
+            ))}
+          </div>
+
+          {/* Task + Due management for selected student */}
+          {selectedStudent ? (
+            <div className="lg:col-span-2 space-y-4">
+              {/* Tasks */}
+              <div className="card">
+                <div className="flex items-center gap-2 mb-3">
+                  <ClipboardCheck className="w-4 h-4 text-forest-700" />
+                  <h4 className="font-bold text-forest-900">المهام — {selectedStudent.full_name}</h4>
+                </div>
+                <div className="space-y-2 mb-4">
+                  {studentTasks.length === 0 ? (
+                    <p className="text-sm text-charcoal-400">لا توجد مهام لهذا الطالب في هذه الفئة</p>
+                  ) : (
+                    studentTasks.map((t) => (
+                      <div key={t.id} className="flex items-center gap-2 p-2.5 rounded-lg border border-cream-200">
+                        <button onClick={() => toggleTask(t)} className={`w-5 h-5 rounded-full border-2 flex items-center justify-center shrink-0 ${t.completed ? 'bg-forest-600 border-forest-600' : 'border-charcoal-300'}`}>
+                          {t.completed && <CheckCircle className="w-3 h-3 text-white" />}
+                        </button>
+                        <div className="flex-1">
+                          <p className={`text-sm font-medium ${t.completed ? 'line-through text-charcoal-400' : 'text-forest-900'}`}>{t.title}</p>
+                          {t.description && <p className="text-xs text-charcoal-400">{t.description}</p>}
+                          {t.due_date && <p className="text-xs text-gold-700">موعد: {formatDateArabic(t.due_date)}</p>}
+                        </div>
+                        <button onClick={() => deleteTask(t.id)} className="p-1 rounded-lg hover:bg-red-50 text-red-500">
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                    ))
+                  )}
+                </div>
+                <div className="space-y-2 pt-3 border-t border-cream-200">
+                  <input value={newTaskTitle} onChange={(e) => setNewTaskTitle(e.target.value)} className="input" placeholder="عنوان المهمة" />
+                  <input value={newTaskDesc} onChange={(e) => setNewTaskDesc(e.target.value)} className="input" placeholder="وصف المهمة (اختياري)" />
+                  <div className="flex gap-2">
+                    <input type="date" value={newTaskDue} onChange={(e) => setNewTaskDue(e.target.value)} className="input flex-1" />
+                    <button onClick={addTask} disabled={!newTaskTitle} className="btn btn-primary text-sm whitespace-nowrap">
+                      <Plus className="w-4 h-4" />
+                      إضافة مهمة
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              {/* Financial Dues */}
+              <div className="card">
+                <div className="flex items-center gap-2 mb-3">
+                  <DollarSign className="w-4 h-4 text-forest-700" />
+                  <h4 className="font-bold text-forest-900">المستحقات المالية — {selectedStudent.full_name}</h4>
+                </div>
+                <div className="space-y-2 mb-4">
+                  {studentDues.length === 0 ? (
+                    <p className="text-sm text-charcoal-400">لا توجد مستحقات لهذا الطالب في هذه الفئة</p>
+                  ) : (
+                    studentDues.map((d) => (
+                      <div key={d.id} className="flex items-center justify-between p-2.5 rounded-lg border border-cream-200">
+                        <div>
+                          <p className="text-sm font-medium text-forest-900">{d.description}</p>
+                          <p className="text-xs text-charcoal-400">${d.amount} • {formatDateArabic(d.created_at)}</p>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <button onClick={() => togglePaid(d)} className={`badge cursor-pointer ${d.status === 'unpaid' ? 'bg-red-100 text-red-700' : 'bg-green-100 text-green-700'}`}>
+                            {d.status === 'unpaid' ? 'غير مدفوع' : 'مدفوع'}
+                          </button>
+                          <button onClick={() => deleteDue(d.id)} className="p-1 rounded-lg hover:bg-red-50 text-red-500">
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+                      </div>
+                    ))
+                  )}
+                </div>
+                <div className="flex gap-2 pt-3 border-t border-cream-200">
+                  <input value={newDueDesc} onChange={(e) => setNewDueDesc(e.target.value)} className="input" placeholder="الوصف" />
+                  <input type="number" step="0.01" value={newDueAmount} onChange={(e) => setNewDueAmount(e.target.value)} className="input w-28" placeholder="$" />
+                  <button onClick={addDue} disabled={!newDueDesc || !newDueAmount} className="btn btn-primary text-sm whitespace-nowrap">
+                    <Plus className="w-4 h-4" />
+                    إضافة رسوم
+                  </button>
+                </div>
+              </div>
+            </div>
+          ) : (
+            <div className="lg:col-span-2 flex items-center justify-center">
+              <p className="text-charcoal-400 text-sm">اختر طالباً لإدارة مهامه ومستحقاته</p>
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }
@@ -1617,16 +1836,22 @@ function CategoryForm({ category, onClose, onSaved }: { category: Category | nul
 function FinancialTab() {
   const [students, setStudents] = useState<Profile[]>([]);
   const [dues, setDues] = useState<FinancialDue[]>([]);
+  const [categories, setCategories] = useState<Category[]>([]);
   const [loading, setLoading] = useState(true);
   const [selected, setSelected] = useState<Profile | null>(null);
   const [showAdd, setShowAdd] = useState(false);
   const [newDesc, setNewDesc] = useState('');
   const [newAmount, setNewAmount] = useState('');
+  const [newCatId, setNewCatId] = useState('');
 
   const load = useCallback(async () => {
     setLoading(true);
-    const { data } = await supabase.from('profiles').select('*').eq('role', 'student').eq('status', 'approved').order('full_name');
-    setStudents(data as Profile[] || []);
+    const [{ data: profileData }, { data: catData }] = await Promise.all([
+      supabase.from('profiles').select('*').eq('role', 'student').eq('status', 'approved').order('full_name'),
+      supabase.from('categories').select('*').order('name'),
+    ]);
+    setStudents(profileData as Profile[] || []);
+    setCategories(catData as Category[] || []);
     setLoading(false);
   }, []);
 
@@ -1654,12 +1879,14 @@ function FinancialTab() {
     if (!selected || !newDesc || !newAmount) return;
     await supabase.from('financial_dues').insert({
       student_id: selected.id,
+      category_id: newCatId || null,
       description: newDesc,
       amount: parseFloat(newAmount),
     });
-    await createNotification(selected.id, 'رسوم جديدة', `${newDesc}: $${newAmount}`, 'financial');
+    await createNotification(selected.id, 'رسوم جديدة', `${newDesc}: ${newAmount}`, 'financial');
     setNewDesc('');
     setNewAmount('');
+    setNewCatId('');
     setShowAdd(false);
     loadDues(selected.id);
   };
@@ -1742,6 +1969,15 @@ function FinancialTab() {
             <div>
               <label className="label">المبلغ ($)</label>
               <input type="number" step="0.01" value={newAmount} onChange={(e) => setNewAmount(e.target.value)} className="input" placeholder="2.00" />
+            </div>
+            <div>
+              <label className="label">الفئة (اختياري)</label>
+              <select value={newCatId} onChange={(e) => setNewCatId(e.target.value)} className="input">
+                <option value="">— بدون فئة —</option>
+                {categories.map((c) => (
+                  <option key={c.id} value={c.id}>{c.name}</option>
+                ))}
+              </select>
             </div>
             <button onClick={addDue} disabled={!newDesc || !newAmount} className="btn btn-primary w-full">
               <Save className="w-4 h-4" />
