@@ -37,7 +37,7 @@ export default function StudentPortal() {
 
   const load = useCallback(async () => {
     if (!profile) return;
-    const [cats, evals, allEvals, sess, duesData, tasksData, attData, notesData, courseData, enrollData, settingsData] = await Promise.all([
+    const [cats, evals, allEvals, sess, duesData, tasksData, attData, notesData, courseData, enrollData, catEnrollData, settingsData] = await Promise.all([
       supabase.from('categories').select('*').order('name'),
       supabase.from('evaluations').select('*, category:category(*)').eq('student_id', profile.id).eq('week_number', weekNumber).eq('year', year),
       supabase.from('evaluations').select('*, category:category(*)').eq('student_id', profile.id).order('created_at', { ascending: false }),
@@ -48,14 +48,18 @@ export default function StudentPortal() {
       supabase.from('student_notes').select('*').eq('student_id', profile.id).order('created_at', { ascending: false }),
       supabase.from('courses').select('*').order('title'),
       supabase.from('student_courses').select('course_id').eq('student_id', profile.id),
+      supabase.from('student_categories').select('category_id').eq('student_id', profile.id),
       supabase.from('settings').select('*').eq('id', 1).maybeSingle(),
     ]);
-    setCategories(cats.data as Category[] || []);
-    setEvaluations(evals.data as Evaluation[] || []);
-    setAllEvaluations(allEvals.data as Evaluation[] || []);
-    setSessions(sess.data as Session[] || []);
+    const enrolledCatIds = new Set((catEnrollData.data || []).map((e: any) => e.category_id));
+    const allCategories = (cats.data as Category[]) || [];
+    setCategories(allCategories.filter((c) => enrolledCatIds.has(c.id)));
+    setEvaluations((evals.data as Evaluation[] || []).filter((e) => !e.category_id || enrolledCatIds.has(e.category_id)));
+    const filteredAllEvals = (allEvals.data as Evaluation[] || []).filter((e) => !e.category_id || enrolledCatIds.has(e.category_id));
+    setAllEvaluations(filteredAllEvals);
+    setSessions((sess.data as Session[] || []).filter((s) => !s.category_id || enrolledCatIds.has(s.category_id)));
     setDues(duesData.data as FinancialDue[] || []);
-    setTasks(tasksData.data as Task[] || []);
+    setTasks((tasksData.data as Task[] || []).filter((t) => !t.category_id || enrolledCatIds.has(t.category_id)));
     setAttendance(attData.data as Attendance[] || []);
     setNotes(notesData.data as StudentNote[] || []);
     const allCourses = courseData.data as Course[] || [];
@@ -65,7 +69,7 @@ export default function StudentPortal() {
     setEnrolledCourses(enrolled);
     if (settingsData) setBasePoints((settingsData as AppSettings).base_points);
     // Compute per-course points
-    const evalsAll = (allEvals.data as Evaluation[]) || [];
+    const evalsAll = filteredAllEvals;
     const notesAll = (notesData.data as StudentNote[]) || [];
     const pointsMap: Record<string, number> = {};
     const bp = settingsData ? (settingsData as AppSettings).base_points : 100;
