@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback, useRef } from 'react';
-import { Users, ClipboardCheck, GraduationCap, Star, DollarSign, QrCode, Settings, CircleCheck as CheckCircle, Circle as XCircle, Clock, Plus, Trash2, CreditCard as Edit, Save, X, ScanLine, Calendar, MapPin, Award, BookOpen, Trophy, Play, Pause, TriangleAlert as AlertTriangle, StickyNote } from 'lucide-react';
+import { Users, ClipboardCheck, GraduationCap, Star, DollarSign, QrCode, Settings, CircleCheck as CheckCircle, Circle as XCircle, Clock, Plus, Trash2, CreditCard as Edit, Save, X, Calendar, MapPin, Award, BookOpen, Trophy, Play, Pause, TriangleAlert as AlertTriangle, StickyNote } from 'lucide-react';
 import { supabase } from '@/lib/supabase';
 import { useAuth } from '@/lib/auth';
 import { DashboardLayout } from '@/components/DashboardLayout';
@@ -13,7 +13,7 @@ import { formatDateArabic, formatTimeArabic } from '@/lib/date';
 import type { Profile, Course, Category, Evaluation, Session, FinancialDue, Task, Attendance, StudentNote, NoteType } from '@/lib/types';
 import QRCode from 'qrcode';
 
-type Tab = 'overview' | 'approvals' | 'students' | 'courses' | 'attendance' | 'evaluations' | 'financial' | 'categories' | 'settings';
+type Tab = 'overview' | 'approvals' | 'students' | 'attendance' | 'evaluations' | 'financial' | 'categories' | 'settings';
 
 export default function AdminDashboard() {
   const [tab, setTab] = useState<Tab>('overview');
@@ -36,7 +36,6 @@ export default function AdminDashboard() {
           ['overview', 'نظرة عامة', <Users className="w-4 h-4" />],
           ['approvals', 'الموافقات', <ClipboardCheck className="w-4 h-4" />],
           ['students', 'الطلاب', <GraduationCap className="w-4 h-4" />],
-          ['courses', 'الدورات', <BookOpen className="w-4 h-4" />],
           ['attendance', 'الحضور', <QrCode className="w-4 h-4" />],
           ['evaluations', 'التقييمات', <Star className="w-4 h-4" />],
           ['categories', 'الفئات', <Award className="w-4 h-4" />],
@@ -57,7 +56,6 @@ export default function AdminDashboard() {
       {tab === 'overview' && <OverviewTab />}
       {tab === 'approvals' && <ApprovalsTab />}
       {tab === 'students' && <StudentsTab />}
-      {tab === 'courses' && <CoursesTab />}
       {tab === 'attendance' && <AttendanceTab />}
       {tab === 'evaluations' && <EvaluationsTab />}
       {tab === 'categories' && <CategoriesTab />}
@@ -653,7 +651,7 @@ function StudentsTab() {
                 <h4 className="font-bold text-forest-900 mb-2">الدورات المسجّل بها</h4>
                 <div className="space-y-2">
                   {courses.length === 0 ? (
-                    <p className="text-sm text-charcoal-400">لا توجد دورات. أنشئ دورات من تبويب الدورات.</p>
+                    <p className="text-sm text-charcoal-400">لا توجد دورات مضافة بعد.</p>
                   ) : (
                     courses.map((c) => {
                       const enrolled = (enrollments[selected.id] || []).includes(c.id);
@@ -688,237 +686,10 @@ function StudentsTab() {
   );
 }
 
-// ============ COURSES ============
-function CoursesTab() {
-  const [courses, setCourses] = useState<Course[]>([]);
-  const [sessions, setSessions] = useState<Session[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [editing, setEditing] = useState<Course | null>(null);
-  const [showForm, setShowForm] = useState(false);
-  const [showSession, setShowSession] = useState(false);
-
-  const load = useCallback(async () => {
-    setLoading(true);
-    const [{ data: courseData }, { data: sessionData }] = await Promise.all([
-      supabase.from('courses').select('*').order('created_at', { ascending: false }),
-      supabase.from('sessions').select('*').order('start_time', { ascending: false }),
-    ]);
-    setCourses(courseData as Course[] || []);
-    setSessions(sessionData as Session[] || []);
-    setLoading(false);
-  }, []);
-
-  useEffect(() => { load(); }, [load]);
-
-  const deleteCourse = async (id: string) => {
-    if (!confirm('هل أنت متأكد من حذف هذه الدورة؟')) return;
-    await supabase.from('courses').delete().eq('id', id);
-    load();
-  };
-
-  if (loading) return <Loading />;
-
-  return (
-    <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <h3 className="text-lg font-bold text-forest-900">الدورات والأنشطة</h3>
-        <button onClick={() => { setEditing(null); setShowForm(true); }} className="btn btn-gold text-sm">
-          <Plus className="w-4 h-4" />
-          دورة جديدة
-        </button>
-      </div>
-
-      {courses.length === 0 ? (
-        <EmptyState icon={<BookOpen className="w-8 h-8" />} title="لا توجد دورات" subtitle="أضف دورة جديدة لبدء التنظيم" />
-      ) : (
-        <div className="grid md:grid-cols-2 gap-4">
-          {courses.map((c) => (
-            <div key={c.id} className="card">
-              <div className="flex items-start justify-between mb-2">
-                <h4 className="font-bold text-forest-900">{c.title}</h4>
-                <div className="flex gap-1">
-                  <button onClick={() => { setEditing(c); setShowForm(true); }} className="p-1.5 rounded-lg hover:bg-cream-100 text-charcoal-500">
-                    <Edit className="w-4 h-4" />
-                  </button>
-                  <button onClick={() => deleteCourse(c.id)} className="p-1.5 rounded-lg hover:bg-red-50 text-red-500">
-                    <Trash2 className="w-4 h-4" />
-                  </button>
-                </div>
-              </div>
-              <p className="text-sm text-charcoal-500 mb-2">{c.description}</p>
-              {c.schedule_days && c.schedule_days.length > 0 ? (
-                <p className="text-xs text-charcoal-400">{c.schedule_days.join(' • ')}{c.schedule_start_time ? ` من ${c.schedule_start_time}` : ''}{c.schedule_end_time ? ` إلى ${c.schedule_end_time}` : ''}</p>
-              ) : c.schedule ? (
-                <p className="text-xs text-charcoal-400">المواعيد: {c.schedule}</p>
-              ) : null}
-              {c.session_duration_hours && Number(c.session_duration_hours) > 0 && (
-                <p className="text-xs text-forest-600 mt-1">مدة الحصة: {c.session_duration_hours} ساعة</p>
-              )}
-              {c.total_sessions && c.total_sessions > 0 && (
-                <p className="text-xs text-charcoal-400">عدد الحصص: {c.total_sessions}</p>
-              )}
-              {c.time_notes && (
-                <p className="text-xs text-gold-600 mt-1">{c.time_notes}</p>
-              )}
-              {c.supervisor_notes && (
-                <p className="text-xs text-charcoal-400 mt-1 flex items-start gap-1">
-                  <StickyNote className="w-3 h-3 mt-0.5 shrink-0" />{c.supervisor_notes}
-                </p>
-              )}
-            </div>
-          ))}
-        </div>
-      )}
-
-      {/* Sessions */}
-      <div className="flex items-center justify-between pt-4">
-        <h3 className="text-lg font-bold text-forest-900">الحصص والمباريات</h3>
-        <button onClick={() => setShowSession(true)} className="btn btn-gold text-sm">
-          <Plus className="w-4 h-4" />
-          حصة جديدة
-        </button>
-      </div>
-
-      {sessions.length === 0 ? (
-        <EmptyState icon={<Calendar className="w-8 h-8" />} title="لا توجد حصص مجدولة" />
-      ) : (
-        <div className="space-y-2">
-          {sessions.map((s) => (
-            <div key={s.id} className="card flex items-center justify-between">
-              <div>
-                <div className="flex items-center gap-2 mb-1">
-                  <p className="font-bold text-forest-900">{s.title}</p>
-                  <Badge color={s.session_type === 'match' ? 'gold' : s.session_type === 'event' ? 'green' : 'forest'}>
-                    {s.session_type === 'match' ? 'مباراة' : s.session_type === 'event' ? 'فعالية' : 'حصة'}
-                  </Badge>
-                  {s.is_active && <Badge color="green">نشطة</Badge>}
-                </div>
-                <p className="text-sm text-charcoal-500">
-                  {formatDateArabic(s.start_time)} • {formatTimeArabic(s.start_time)} - {formatTimeArabic(s.end_time)}
-                </p>
-                {s.location && <p className="text-xs text-charcoal-400 flex items-center gap-1 mt-1"><MapPin className="w-3 h-3" />{s.location}</p>}
-              </div>
-              <button onClick={() => supabase.from('sessions').delete().eq('id', s.id).then(() => load())} className="p-2 rounded-lg hover:bg-red-50 text-red-500">
-                <Trash2 className="w-4 h-4" />
-              </button>
-            </div>
-          ))}
-        </div>
-      )}
-
-      {showForm && <CourseForm course={editing} onClose={() => setShowForm(false)} onSaved={() => { setShowForm(false); load(); }} />}
-      {showSession && <SessionForm courses={courses} onClose={() => setShowSession(false)} onSaved={() => { setShowSession(false); load(); }} />}
-    </div>
-  );
-}
-
-const WEEKDAYS = ['السبت', 'الأحد', 'الاثنين', 'الثلاثاء', 'الأربعاء', 'الخميس', 'الجمعة'];
-
-function CourseForm({ course, onClose, onSaved }: { course: Course | null; onClose: () => void; onSaved: () => void }) {
-  const [title, setTitle] = useState(course?.title || '');
-  const [description, setDescription] = useState(course?.description || '');
-  const [selectedDays, setSelectedDays] = useState<string[]>(course?.schedule_days || []);
-  const [startTime, setStartTime] = useState(course?.schedule_start_time || '');
-  const [endTime, setEndTime] = useState(course?.schedule_end_time || '');
-  const [durationHours, setDurationHours] = useState(course?.session_duration_hours?.toString() || '1.5');
-  const [timeNotes, setTimeNotes] = useState(course?.time_notes || '');
-  const [totalSessions, setTotalSessions] = useState(course?.total_sessions?.toString() || '0');
-  const [supervisorNotes, setSupervisorNotes] = useState(course?.supervisor_notes || '');
-  const [saving, setSaving] = useState(false);
-
-  const toggleDay = (day: string) => {
-    setSelectedDays((prev) => prev.includes(day) ? prev.filter((d) => d !== day) : [...prev, day]);
-  };
-
-  const save = async () => {
-    setSaving(true);
-    const payload = {
-      title,
-      description,
-      schedule_days: selectedDays,
-      schedule_start_time: startTime || null,
-      schedule_end_time: endTime || null,
-      session_duration_hours: parseFloat(durationHours) || 1.5,
-      time_notes: timeNotes,
-      total_sessions: parseInt(totalSessions) || 0,
-      supervisor_notes: supervisorNotes,
-    };
-    if (course) {
-      await supabase.from('courses').update(payload).eq('id', course.id);
-    } else {
-      await supabase.from('courses').insert(payload);
-    }
-    setSaving(false);
-    onSaved();
-  };
-
-  return (
-    <Modal open onClose={onClose} title={course ? 'تعديل دورة' : 'دورة جديدة'}>
-      <div className="space-y-4">
-        <div>
-          <label className="label">اسم الدورة</label>
-          <input value={title} onChange={(e) => setTitle(e.target.value)} className="input" placeholder="مثال: تجويد القرآن" />
-        </div>
-        <div>
-          <label className="label">الوصف</label>
-          <textarea value={description} onChange={(e) => setDescription(e.target.value)} className="input" rows={2} />
-        </div>
-        <div>
-          <label className="label">المواعيد الأسبوعية</label>
-          <div className="flex flex-wrap gap-2">
-            {WEEKDAYS.map((day) => (
-              <button
-                key={day}
-                type="button"
-                onClick={() => toggleDay(day)}
-                className={`px-3 py-2 rounded-xl text-sm font-medium transition-all ${selectedDays.includes(day) ? 'bg-forest-800 text-cream-50' : 'bg-cream-100 text-charcoal-500 hover:bg-cream-200'}`}
-              >
-                {day}
-              </button>
-            ))}
-          </div>
-        </div>
-        <div className="grid grid-cols-2 gap-3">
-          <div>
-            <label className="label">من الساعة</label>
-            <input type="time" value={startTime} onChange={(e) => setStartTime(e.target.value)} className="input" />
-          </div>
-          <div>
-            <label className="label">إلى الساعة</label>
-            <input type="time" value={endTime} onChange={(e) => setEndTime(e.target.value)} className="input" />
-          </div>
-        </div>
-        <div className="grid grid-cols-2 gap-3">
-          <div>
-            <label className="label">مدة الحصة (ساعات)</label>
-            <input type="number" step="0.5" min="0.5" value={durationHours} onChange={(e) => setDurationHours(e.target.value)} className="input" placeholder="1.5" />
-          </div>
-          <div>
-            <label className="label">عدد الحصص الإجمالي</label>
-            <input type="number" min="0" value={totalSessions} onChange={(e) => setTotalSessions(e.target.value)} className="input" placeholder="12" />
-          </div>
-        </div>
-        <div>
-          <label className="label">ملاحظات الوقت</label>
-          <input value={timeNotes} onChange={(e) => setTimeNotes(e.target.value)} className="input" placeholder="مثال: بعد صلاة الفجر مباشرة" />
-        </div>
-        <div>
-          <label className="label">ملاحظات المشرف</label>
-          <textarea value={supervisorNotes} onChange={(e) => setSupervisorNotes(e.target.value)} className="input" rows={2} placeholder="ملاحظات عامة على الدورة" />
-        </div>
-        <button onClick={save} disabled={saving || !title} className="btn btn-primary w-full">
-          <Save className="w-4 h-4" />
-          حفظ
-        </button>
-      </div>
-    </Modal>
-  );
-}
-
-function SessionForm({ courses, onClose, onSaved }: { courses: Course[]; onClose: () => void; onSaved: () => void }) {
+function SessionForm({ categories, onClose, onSaved }: { categories: Category[]; onClose: () => void; onSaved: () => void }) {
   const [title, setTitle] = useState('');
   const [type, setType] = useState<'class' | 'match' | 'event'>('class');
-  const [courseId, setCourseId] = useState('');
+  const [categoryId, setCategoryId] = useState('');
   const [location, setLocation] = useState('');
   const [date, setDate] = useState('');
   const [startTime, setStartTime] = useState('');
@@ -932,7 +703,7 @@ function SessionForm({ courses, onClose, onSaved }: { courses: Course[]; onClose
     await supabase.from('sessions').insert({
       title,
       session_type: type,
-      course_id: courseId || null,
+      category_id: categoryId,
       location,
       start_time: start.toISOString(),
       end_time: end.toISOString(),
@@ -951,17 +722,17 @@ function SessionForm({ courses, onClose, onSaved }: { courses: Course[]; onClose
         <div className="grid grid-cols-2 gap-3">
           <div>
             <label className="label">النوع</label>
-            <select value={type} onChange={(e) => setType(e.target.value as any)} className="input">
+            <select value={type} onChange={(e) => setType(e.target.value as 'class' | 'match' | 'event')} className="input">
               <option value="class">حصة</option>
               <option value="match">مباراة</option>
               <option value="event">فعالية</option>
             </select>
           </div>
           <div>
-            <label className="label">الدورة (اختياري)</label>
-            <select value={courseId} onChange={(e) => setCourseId(e.target.value)} className="input">
-              <option value="">— بدون —</option>
-              {courses.map((c) => <option key={c.id} value={c.id}>{c.title}</option>)}
+            <label className="label">الفئة</label>
+            <select value={categoryId} onChange={(e) => setCategoryId(e.target.value)} className="input">
+              <option value="">— اختر الفئة —</option>
+              {categories.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
             </select>
           </div>
         </div>
@@ -983,7 +754,7 @@ function SessionForm({ courses, onClose, onSaved }: { courses: Course[]; onClose
             <input type="time" value={endTime} onChange={(e) => setEndTime(e.target.value)} className="input" />
           </div>
         </div>
-        <button onClick={save} disabled={saving || !title || !date || !startTime || !endTime} className="btn btn-primary w-full">
+        <button onClick={save} disabled={saving || !title || !categoryId || !date || !startTime || !endTime} className="btn btn-primary w-full">
           <Save className="w-4 h-4" />
           حفظ
         </button>
@@ -1002,18 +773,22 @@ function AttendanceTab() {
   const [attendance, setAttendance] = useState<Attendance[]>([]);
   const [loading, setLoading] = useState(true);
   const [manualOpen, setManualOpen] = useState(false);
+  const [showSession, setShowSession] = useState(false);
+  const [categories, setCategories] = useState<Category[]>([]);
   const [timerSeconds, setTimerSeconds] = useState<number>(0);
   const [timerRunning, setTimerRunning] = useState(false);
   const [timerEnded, setTimerEnded] = useState(false);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const load = useCallback(async () => {
-    const [{ data: courseData }, { data: sessionData }] = await Promise.all([
+    const [{ data: courseData }, { data: sessionData }, { data: catData }] = await Promise.all([
       supabase.from('courses').select('*').order('title'),
       supabase.from('sessions').select('*').order('start_time', { ascending: false }),
+      supabase.from('categories').select('*').order('name'),
     ]);
     setCourses(courseData as Course[] || []);
     setSessions(sessionData as Session[] || []);
+    setCategories(catData as Category[] || []);
     setLoading(false);
   }, []);
 
@@ -1296,10 +1071,16 @@ function AttendanceTab() {
   // Course picker view
   return (
     <div className="space-y-6">
-      <h3 className="text-lg font-bold text-forest-900">الحصة التي ستبدأ الآن — اختر دورة لبدء الحصة</h3>
+      <div className="flex items-center justify-between">
+        <h3 className="text-lg font-bold text-forest-900">الحصة التي ستبدأ الآن — اختر دورة لبدء الحصة</h3>
+        <button onClick={() => setShowSession(true)} className="btn btn-gold text-sm">
+          <Plus className="w-4 h-4" />
+          حصة جديدة
+        </button>
+      </div>
 
       {courses.length === 0 ? (
-        <EmptyState icon={<Calendar className="w-8 h-8" />} title="لا توجد دورات" subtitle="أنشئ دورة من تبويب الدورات أولاً" />
+        <EmptyState icon={<Calendar className="w-8 h-8" />} title="لا توجد دورات" subtitle="استخدم زر حصة جديدة لإنشاء حصة" />
       ) : (
         <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-4">
           {courses.map((c) => {
@@ -1363,6 +1144,7 @@ function AttendanceTab() {
           </div>
         </div>
       )}
+      {showSession && <SessionForm categories={categories} onClose={() => setShowSession(false)} onSaved={() => { setShowSession(false); load(); }} />}
     </div>
   );
 }
