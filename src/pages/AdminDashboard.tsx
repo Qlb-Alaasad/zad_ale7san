@@ -778,6 +778,7 @@ function AttendanceTab() {
   const [timerSeconds, setTimerSeconds] = useState<number>(0);
   const [timerRunning, setTimerRunning] = useState(false);
   const [timerEnded, setTimerEnded] = useState(false);
+  const [sessionToDelete, setSessionToDelete] = useState<Session | null>(null);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const load = useCallback(async () => {
@@ -921,6 +922,13 @@ function AttendanceTab() {
 
   const resumeTimer = () => {
     if (timerSeconds > 0) setTimerRunning(true);
+  };
+
+  const deleteSession = async (session: Session) => {
+    await supabase.from('attendance').delete().eq('session_id', session.id);
+    await supabase.from('sessions').delete().eq('id', session.id);
+    setSessionToDelete(null);
+    load();
   };
 
   const closeSession = async () => {
@@ -1193,12 +1201,33 @@ function AttendanceTab() {
                   <p className="text-sm font-medium text-forest-900">{s.title}</p>
                   <p className="text-xs text-charcoal-400">{formatDateArabic(s.start_time)} • {formatTimeArabic(s.start_time)}</p>
                 </div>
+                <button onClick={() => setSessionToDelete(s)} className="p-1.5 rounded-lg hover:bg-red-50 text-red-500 transition-colors" title="حذف">
+                  <Trash2 className="w-4 h-4" />
+                </button>
               </div>
             ))}
           </div>
         </div>
       )}
       {showSession && <SessionForm categories={categories} onClose={() => setShowSession(false)} onSaved={() => { setShowSession(false); load(); }} />}
+      <Modal open={!!sessionToDelete} onClose={() => setSessionToDelete(null)} title="تأكيد الحذف" size="sm">
+        <div className="space-y-4">
+          <p className="text-charcoal-600">هل أنت تأكد من حذف هذه الحصة؟</p>
+          {sessionToDelete && (
+            <div className="p-3 rounded-lg bg-cream-50">
+              <p className="text-sm font-medium text-forest-900">{sessionToDelete.title}</p>
+              <p className="text-xs text-charcoal-400">{formatDateArabic(sessionToDelete.start_time)} • {formatTimeArabic(sessionToDelete.start_time)}</p>
+            </div>
+          )}
+          <div className="flex gap-2 justify-end">
+            <button onClick={() => setSessionToDelete(null)} className="btn btn-outline text-sm">إلغاء</button>
+            <button onClick={() => sessionToDelete && deleteSession(sessionToDelete)} className="btn btn-danger text-sm">
+              <Trash2 className="w-4 h-4" />
+              حذف
+            </button>
+          </div>
+        </div>
+      </Modal>
     </div>
   );
 }
