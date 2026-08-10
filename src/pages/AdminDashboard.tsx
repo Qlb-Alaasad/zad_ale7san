@@ -698,15 +698,15 @@ function SessionForm({ categories, onClose, onSaved }: { categories: Category[];
 
   const save = async () => {
     setSaving(true);
-    const start = new Date(`${date}T${startTime || '00:00'}`);
-    const end = new Date(`${date}T${endTime || '23:59'}`);
+    const start = startTime ? new Date(`${date}T${startTime}`) : null;
+    const end = endTime ? new Date(`${date}T${endTime}`) : null;
     await supabase.from('sessions').insert({
       title,
       session_type: type,
-      category_id: categoryId,
+      category_id: categoryId || null,
       location,
-      start_time: start.toISOString(),
-      end_time: end.toISOString(),
+      start_time: start ? start.toISOString() : null,
+      end_time: end ? end.toISOString() : null,
     });
     setSaving(false);
     onSaved();
