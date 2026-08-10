@@ -68,8 +68,8 @@ export interface Session {
   description: string;
   session_type: SessionType;
   location: string;
-  start_time: string;
-  end_time: string;
+  start_time: string | null;
+  end_time: string | null;
   is_active: boolean;
   created_at: string;
 }

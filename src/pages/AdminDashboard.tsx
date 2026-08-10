@@ -691,22 +691,15 @@ function SessionForm({ categories, onClose, onSaved }: { categories: Category[];
   const [type, setType] = useState<'class' | 'match' | 'event'>('class');
   const [categoryId, setCategoryId] = useState('');
   const [location, setLocation] = useState('');
-  const [date, setDate] = useState('');
-  const [startTime, setStartTime] = useState('');
-  const [endTime, setEndTime] = useState('');
   const [saving, setSaving] = useState(false);
 
   const save = async () => {
     setSaving(true);
-    const start = startTime ? new Date(`${date}T${startTime}`) : null;
-    const end = endTime ? new Date(`${date}T${endTime}`) : null;
     await supabase.from('sessions').insert({
       title,
       session_type: type,
       category_id: categoryId || null,
       location,
-      start_time: start ? start.toISOString() : null,
-      end_time: end ? end.toISOString() : null,
     });
     setSaving(false);
     onSaved();
@@ -740,21 +733,7 @@ function SessionForm({ categories, onClose, onSaved }: { categories: Category[];
           <label className="label">المكان</label>
           <input value={location} onChange={(e) => setLocation(e.target.value)} className="input" placeholder="مثال: ملعب الأكاديمية" />
         </div>
-        <div>
-          <label className="label">التاريخ</label>
-          <input type="date" value={date} onChange={(e) => setDate(e.target.value)} className="input" />
-        </div>
-        <div className="grid grid-cols-2 gap-3">
-          <div>
-            <label className="label">من الساعة <span className="text-charcoal-400 text-xs">(اختياري)</span></label>
-            <input type="time" value={startTime} onChange={(e) => setStartTime(e.target.value)} className="input" />
-          </div>
-          <div>
-            <label className="label">إلى الساعة <span className="text-charcoal-400 text-xs">(اختياري)</span></label>
-            <input type="time" value={endTime} onChange={(e) => setEndTime(e.target.value)} className="input" />
-          </div>
-        </div>
-        <button onClick={save} disabled={saving || !title || !categoryId || !date} className="btn btn-primary w-full">
+        <button onClick={save} disabled={saving || !title || !categoryId} className="btn btn-primary w-full">
           <Save className="w-4 h-4" />
           حفظ
         </button>
@@ -784,7 +763,7 @@ function AttendanceTab() {
   const load = useCallback(async () => {
     const [{ data: courseData }, { data: sessionData }, { data: catData }] = await Promise.all([
       supabase.from('courses').select('*').order('title'),
-      supabase.from('sessions').select('*').order('start_time', { ascending: false }),
+      supabase.from('sessions').select('*').order('created_at', { ascending: false }),
       supabase.from('categories').select('*').order('name'),
     ]);
     setCourses(courseData as Course[] || []);
@@ -824,6 +803,15 @@ function AttendanceTab() {
       setTimerEnded(false);
       load();
     }
+  };
+
+  const startTemplate = async (template: Session) => {
+    await supabase.from('sessions').update({ is_active: false }).eq('is_active', true);
+    await supabase.from('sessions').update({ is_active: true }).eq('id', template.id);
+    setActiveSession({ ...template, is_active: true });
+    setTimerSeconds(5400);
+    setTimerRunning(true);
+    setTimerEnded(false);
   };
 
   // Timer countdown
@@ -933,7 +921,26 @@ function AttendanceTab() {
 
   const closeSession = async () => {
     if (activeSession) {
-      await supabase.from('sessions').update({ is_active: false }).eq('id', activeSession.id);
+      const now = new Date().toISOString();
+      if (!activeSession.start_time) {
+        const { data: completed } = await supabase.from('sessions').insert({
+          title: activeSession.title,
+          session_type: activeSession.session_type,
+          category_id: activeSession.category_id,
+          course_id: activeSession.course_id,
+          location: activeSession.location,
+          start_time: now,
+          end_time: now,
+          is_active: false,
+        }).select('*').single();
+        if (completed) {
+          await supabase.from('attendance').update({ session_id: completed.id }).eq('session_id', activeSession.id);
+          await supabase.from('student_notes').update({ session_id: completed.id }).eq('session_id', activeSession.id);
+        }
+        await supabase.from('sessions').update({ is_active: false }).eq('id', activeSession.id);
+      } else {
+        await supabase.from('sessions').update({ is_active: false, end_time: now }).eq('id', activeSession.id);
+      }
     }
     if (timerRef.current) clearInterval(timerRef.current);
     setActiveSession(null);
@@ -1029,7 +1036,11 @@ function AttendanceTab() {
         <div className="card flex items-center justify-between">
           <div>
             <p className="font-bold text-forest-900">{activeSession.title}</p>
-            <p className="text-sm text-charcoal-500">{course?.time_notes || `${formatTimeArabic(activeSession.start_time)} - ${formatTimeArabic(activeSession.end_time)}`}</p>
+            <p className="text-sm text-charcoal-500">
+              {course?.time_notes || (activeSession.start_time && activeSession.end_time
+                ? `${formatTimeArabic(activeSession.start_time)} - ${formatTimeArabic(activeSession.end_time)}`
+                : 'قالب حصة — بدون وقت محدد')}
+            </p>
           </div>
           <button onClick={closeSession} className="btn btn-outline text-sm">
             <X className="w-4 h-4" />
@@ -1170,7 +1181,7 @@ function AttendanceTab() {
                 {activeS ? (
                   <button onClick={() => {
                     setActiveSession(activeS);
-                    const remaining = Math.floor((new Date(activeS.end_time).getTime() - Date.now()) / 1000);
+                    const remaining = activeS.end_time ? Math.floor((new Date(activeS.end_time).getTime() - Date.now()) / 1000) : 0;
                     setTimerSeconds(Math.max(0, remaining));
                     setTimerRunning(remaining > 0);
                     setTimerEnded(remaining <= 0);
@@ -1190,12 +1201,51 @@ function AttendanceTab() {
         </div>
       )}
 
+      {/* Session templates */}
+      {sessions.filter((s) => !s.start_time).length > 0 && (
+        <div className="card">
+          <h4 className="font-bold text-forest-900 mb-3">قوالب الحصص</h4>
+          <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-3">
+            {sessions.filter((s) => !s.start_time).map((s) => (
+              <div key={s.id} className="p-3 rounded-lg bg-cream-50 border border-cream-200">
+                <div className="mb-2">
+                  <p className="font-medium text-forest-900 text-sm">{s.title}</p>
+                  <p className="text-xs text-charcoal-400">{s.location || '—'}</p>
+                </div>
+                {s.is_active ? (
+                  <button onClick={() => {
+                    setActiveSession(s);
+                    const remaining = s.end_time ? Math.floor((new Date(s.end_time).getTime() - Date.now()) / 1000) : 0;
+                    setTimerSeconds(Math.max(0, remaining));
+                    setTimerRunning(remaining > 0);
+                    setTimerEnded(remaining <= 0);
+                  }} className="btn btn-primary w-full text-sm">
+                    <QrCode className="w-4 h-4" />
+                    متابعة الحصة النشطة
+                  </button>
+                ) : (
+                  <div className="flex gap-2">
+                    <button onClick={() => startTemplate(s)} className="btn btn-primary flex-1 text-sm">
+                      <Play className="w-4 h-4" />
+                      بدء الحصة
+                    </button>
+                    <button onClick={() => setSessionToDelete(s)} className="p-1.5 rounded-lg hover:bg-red-50 text-red-500 transition-colors" title="حذف">
+                      <Trash2 className="w-4 h-4" />
+                    </button>
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
       {/* Recent sessions history */}
-      {sessions.length > 0 && (
+      {sessions.filter((s) => !s.is_active && s.start_time).length > 0 && (
         <div className="card">
           <h4 className="font-bold text-forest-900 mb-3">سجل الحصص السابقة</h4>
           <div className="space-y-2 max-h-60 overflow-y-auto">
-            {sessions.filter((s) => !s.is_active).slice(0, 10).map((s) => (
+            {sessions.filter((s) => !s.is_active && s.start_time).slice(0, 10).map((s) => (
               <div key={s.id} className="flex items-center justify-between p-2 rounded-lg bg-cream-50">
                 <div>
                   <p className="text-sm font-medium text-forest-900">{s.title}</p>
@@ -1216,7 +1266,9 @@ function AttendanceTab() {
           {sessionToDelete && (
             <div className="p-3 rounded-lg bg-cream-50">
               <p className="text-sm font-medium text-forest-900">{sessionToDelete.title}</p>
-              <p className="text-xs text-charcoal-400">{formatDateArabic(sessionToDelete.start_time)} • {formatTimeArabic(sessionToDelete.start_time)}</p>
+              {sessionToDelete.start_time && (
+                <p className="text-xs text-charcoal-400">{formatDateArabic(sessionToDelete.start_time)} • {formatTimeArabic(sessionToDelete.start_time)}</p>
+              )}
             </div>
           )}
           <div className="flex gap-2 justify-end">

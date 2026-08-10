@@ -165,7 +165,7 @@ export default function StudentPortal() {
         return;
       }
       const now = new Date();
-      const start = new Date(session.start_time);
+      const start = session.start_time ? new Date(session.start_time) : now;
       if (!session.is_active) {
         setScanResult({ success: false, message: 'الحصة غير نشطة حالياً. اطلب من الشيخ تفعيلها.' });
         isScanningPaused.current = false;
@@ -373,7 +373,7 @@ export default function StudentPortal() {
                       {s.session_type === 'match' ? 'مباراة' : 'فعالية'}
                     </Badge>
                   </div>
-                  <p className="text-xs text-charcoal-500">{formatDateArabic(s.start_time)} • {formatTimeArabic(s.start_time)}</p>
+                  <p className="text-xs text-charcoal-500">{s.start_time ? `${formatDateArabic(s.start_time)} • ${formatTimeArabic(s.start_time)}` : 'غير مجدول'}</p>
                   {s.location && <p className="text-xs text-charcoal-400 flex items-center gap-1 mt-1"><MapPin className="w-3 h-3" />{s.location}</p>}
                 </div>
               ))}
