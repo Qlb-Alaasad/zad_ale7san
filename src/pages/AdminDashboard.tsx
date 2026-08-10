@@ -698,8 +698,8 @@ function SessionForm({ categories, onClose, onSaved }: { categories: Category[];
 
   const save = async () => {
     setSaving(true);
-    const start = new Date(`${date}T${startTime}`);
-    const end = new Date(`${date}T${endTime}`);
+    const start = new Date(`${date}T${startTime || '00:00'}`);
+    const end = new Date(`${date}T${endTime || '23:59'}`);
     await supabase.from('sessions').insert({
       title,
       session_type: type,
@@ -746,15 +746,15 @@ function SessionForm({ categories, onClose, onSaved }: { categories: Category[];
         </div>
         <div className="grid grid-cols-2 gap-3">
           <div>
-            <label className="label">من الساعة</label>
+            <label className="label">من الساعة <span className="text-charcoal-400 text-xs">(اختياري)</span></label>
             <input type="time" value={startTime} onChange={(e) => setStartTime(e.target.value)} className="input" />
           </div>
           <div>
-            <label className="label">إلى الساعة</label>
+            <label className="label">إلى الساعة <span className="text-charcoal-400 text-xs">(اختياري)</span></label>
             <input type="time" value={endTime} onChange={(e) => setEndTime(e.target.value)} className="input" />
           </div>
         </div>
-        <button onClick={save} disabled={saving || !title || !categoryId || !date || !startTime || !endTime} className="btn btn-primary w-full">
+        <button onClick={save} disabled={saving || !title || !categoryId || !date} className="btn btn-primary w-full">
           <Save className="w-4 h-4" />
           حفظ
         </button>
@@ -843,12 +843,7 @@ function AttendanceTab() {
     }
   }, [timerRunning]);
 
-  // Auto-absence when timer ends
-  useEffect(() => {
-    if (timerEnded && activeSession) {
-      markAbsentees(activeSession);
-    }
-  }, [timerEnded, activeSession]);
+
 
   const markAbsentees = async (session: Session) => {
     const { data: allStudents } = await supabase.from('profiles')
@@ -916,6 +911,7 @@ function AttendanceTab() {
     if (timerRef.current) clearInterval(timerRef.current);
     setTimerRunning(false);
     setTimerEnded(true);
+    await markAbsentees(activeSession);
   };
 
   const pauseTimer = () => {
@@ -1041,9 +1037,15 @@ function AttendanceTab() {
           </div>
           <p className={`text-5xl font-bold mb-4 ${timerEnded ? 'text-red-600' : 'text-forest-900'}`}>{formatTimer(timerSeconds)}</p>
           {timerEnded ? (
-            <div className="flex items-center justify-center gap-2 text-sm text-red-600">
-              <AlertTriangle className="w-5 h-5" />
-              تم تسجيل غياب الطلاب غير الحاضرين تلقائياً
+            <div className="flex flex-col items-center gap-3">
+              <div className="flex items-center justify-center gap-2 text-sm text-red-600">
+                <AlertTriangle className="w-5 h-5" />
+                انتهت مدة الحصة — اضغط «إنهاء الحصة» للإنهاء، أو «إنهاء وتسجيل الغياب» لتسجيل الغياب
+              </div>
+              <button onClick={endSessionEarly} className="btn btn-primary text-sm">
+                <AlertTriangle className="w-4 h-4" />
+                إنهاء وتسجيل الغياب
+              </button>
             </div>
           ) : (
             <div className="flex items-center justify-center gap-2">
@@ -1125,7 +1127,7 @@ function AttendanceTab() {
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
-        <h3 className="text-lg font-bold text-forest-900">الحصة التي ستبدأ الآن — اختر دورة لبدء الحصة</h3>
+        <h3 className="text-lg font-bold text-forest-900">اختيار فئة لبدء الحصة</h3>
         <button onClick={() => setShowSession(true)} className="btn btn-gold text-sm">
           <Plus className="w-4 h-4" />
           حصة جديدة
@@ -1133,7 +1135,7 @@ function AttendanceTab() {
       </div>
 
       {courses.length === 0 ? (
-        <EmptyState icon={<Calendar className="w-8 h-8" />} title="لا توجد دورات" subtitle="استخدم زر حصة جديدة لإنشاء حصة" />
+        <EmptyState icon={<Calendar className="w-8 h-8" />} title="لا توجد فئات متاحة" subtitle="استخدم زر حصة جديدة لإنشاء حصة" />
       ) : (
         <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-4">
           {courses.map((c) => {
@@ -1185,13 +1187,12 @@ function AttendanceTab() {
         <div className="card">
           <h4 className="font-bold text-forest-900 mb-3">سجل الحصص السابقة</h4>
           <div className="space-y-2 max-h-60 overflow-y-auto">
-            {sessions.slice(0, 10).map((s) => (
+            {sessions.filter((s) => !s.is_active).slice(0, 10).map((s) => (
               <div key={s.id} className="flex items-center justify-between p-2 rounded-lg bg-cream-50">
                 <div>
                   <p className="text-sm font-medium text-forest-900">{s.title}</p>
                   <p className="text-xs text-charcoal-400">{formatDateArabic(s.start_time)} • {formatTimeArabic(s.start_time)}</p>
                 </div>
-                {s.is_active && <Badge color="green">نشطة</Badge>}
               </div>
             ))}
           </div>
