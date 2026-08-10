@@ -851,39 +851,59 @@ function AttendanceTab() {
   }, [timerEnded, activeSession]);
 
   const markAbsentees = async (session: Session) => {
-    // Get all approved students
     const { data: allStudents } = await supabase.from('profiles')
       .select('*').eq('role', 'student').eq('status', 'approved');
     const studentList = allStudents as Profile[] || [];
 
-    // Get existing attendance for this session
     const { data: attData } = await supabase.from('attendance')
       .select('*').eq('session_id', session.id);
     const attList = attData as Attendance[] || [];
     const presentIds = new Set(attList.filter((a) => a.status !== 'absent').map((a) => a.student_id));
 
-    // For students with no attendance record, mark absent + create note
     const absentees = studentList.filter((s) => !presentIds.has(s.id));
-    const courseTitle = session.title.split(' — ')[0] || session.title;
+    const sessionTitle = session.title.split(' — ')[0] || session.title;
+    const { weekNumber, year } = getCurrentWeekYear();
+    const ABSENCE_DEDUCTION = 5;
 
     for (const student of absentees) {
-      // Insert absence attendance record
       await supabase.from('attendance').insert({
         student_id: student.id,
         session_id: session.id,
         status: 'absent',
-        points_deducted: 7,
+        points_deducted: ABSENCE_DEDUCTION,
       });
-      // Insert automated absence note
+
+      if (session.category_id) {
+        const { data: existingEval } = await supabase.from('evaluations')
+          .select('*').eq('student_id', student.id).eq('category_id', session.category_id)
+          .eq('week_number', weekNumber).eq('year', year).single();
+        if (existingEval) {
+          await supabase.from('evaluations').update({
+            points_deducted: (existingEval.points_deducted || 0) + ABSENCE_DEDUCTION,
+          }).eq('id', existingEval.id);
+        } else {
+          await supabase.from('evaluations').insert({
+            student_id: student.id,
+            category_id: session.category_id,
+            week_number: weekNumber,
+            year,
+            points_deducted: ABSENCE_DEDUCTION,
+            note: '',
+          });
+        }
+      }
+
       await supabase.from('student_notes').insert({
         student_id: student.id,
         course_id: session.course_id,
         session_id: session.id,
-        note: `لم يسجل حضوراً في حصة ${courseTitle}`,
+        category_id: session.category_id,
+        note: `غياب تلقائي عن حصة ${sessionTitle} - خصم ${ABSENCE_DEDUCTION} نقاط`,
         note_type: 'absence',
+        points_impact: -ABSENCE_DEDUCTION,
       });
-      // Notify the student
-      await createNotification(student.id, 'غياب تلقائي', `لم يتم تسجيل حضورك في ${courseTitle}`, 'attendance');
+
+      await createNotification(student.id, 'غياب تلقائي', `لم يتم تسجيل حضورك في ${sessionTitle}`, 'attendance');
     }
 
     if (absentees.length > 0) {
@@ -945,12 +965,45 @@ function AttendanceTab() {
   const setManualAttendance = async (studentId: string, status: 'present' | 'late' | 'absent') => {
     if (!activeSession) return;
     const existing = attendance.find((a) => a.student_id === studentId);
-    const pointsDeducted = status === 'late' ? 0 : status === 'absent' ? 7 : 0;
+    const wasAbsent = existing?.status === 'absent';
+    const pointsDeducted = status === 'absent' ? 5 : 0;
     if (existing) {
       await supabase.from('attendance').update({ status, points_deducted: pointsDeducted }).eq('id', existing.id);
     } else {
       await supabase.from('attendance').insert({ student_id: studentId, session_id: activeSession.id, status, points_deducted: pointsDeducted });
     }
+
+    if (status === 'absent' && !wasAbsent && activeSession.category_id) {
+      const { weekNumber, year } = getCurrentWeekYear();
+      const sessionTitle = activeSession.title.split(' — ')[0] || activeSession.title;
+      const { data: existingEval } = await supabase.from('evaluations')
+        .select('*').eq('student_id', studentId).eq('category_id', activeSession.category_id)
+        .eq('week_number', weekNumber).eq('year', year).single();
+      if (existingEval) {
+        await supabase.from('evaluations').update({
+          points_deducted: (existingEval.points_deducted || 0) + 5,
+        }).eq('id', existingEval.id);
+      } else {
+        await supabase.from('evaluations').insert({
+          student_id: studentId,
+          category_id: activeSession.category_id,
+          week_number: weekNumber,
+          year,
+          points_deducted: 5,
+          note: '',
+        });
+      }
+      await supabase.from('student_notes').insert({
+        student_id: studentId,
+        course_id: activeSession.course_id,
+        session_id: activeSession.id,
+        category_id: activeSession.category_id,
+        note: `غياب تلقائي عن حصة ${sessionTitle} - خصم 5 نقاط`,
+        note_type: 'absence',
+        points_impact: -5,
+      });
+    }
+
     await createNotification(studentId, 'تحديث الحضور', `تم تسجيل حضورك كـ "${status === 'present' ? 'حاضر' : status === 'late' ? 'متأخر' : 'غائب'}" في ${activeSession.title}`, 'attendance');
     loadAttendance(activeSession.id);
   };
