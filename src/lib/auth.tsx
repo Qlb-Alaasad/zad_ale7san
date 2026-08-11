@@ -32,13 +32,14 @@ const AuthContext = createContext<AuthContextValue>({
 });
 
 export function AuthProvider({ children }: { children: ReactNode }) {
-  // Hydrate from localStorage immediately so the app can render without
-  // waiting for the async Supabase session check on refresh.
+  // Hydrate synchronously from localStorage so the app renders the correct
+  // dashboard immediately on refresh — before any Supabase network call.
   const [session, setSession] = useState<Session | null>(null);
   const [profile, setProfile] = useState<Profile | null>(loadCachedProfile);
   const [loading, setLoading] = useState(() => loadCachedProfile() === null);
   const mountedRef = useRef(true);
-  const profileLoadedRef = useRef<string | null>(null);
+  const profileLoadedRef = useRef<string | null>(loadCachedProfile()?.id ?? null);
+  const initialSettledRef = useRef(false);
 
   const setProfileAndCache = (p: Profile | null) => {
     if (!mountedRef.current) return;
@@ -65,16 +66,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     mountedRef.current = true;
 
-    let initialChecked = false;
-
     const finishInitial = () => {
-      if (!initialChecked && mountedRef.current) {
-        initialChecked = true;
+      if (!initialSettledRef.current && mountedRef.current) {
+        initialSettledRef.current = true;
         setLoading(false);
       }
     };
 
-    // Primary session check on mount — reads from localStorage (persisted session)
+    // Primary session check — reads from Supabase's own localStorage persistence
     supabase.auth.getSession().then(({ data, error }) => {
       if (error) {
         console.error('getSession error:', error.message);
@@ -83,33 +82,48 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       }
       if (!mountedRef.current) return;
       setSession(data.session);
+
       if (data.session?.user) {
+        // Refresh profile from DB to pick up any changes, but DON'T clear
+        // the cached profile if this fails — the cache is still valid.
         loadProfile(data.session.user.id).finally(finishInitial);
       } else {
-        setProfileAndCache(null);
+        // No Supabase session. BUT: don't nuke the cache during initial load
+        // — it may just not have been restored yet. Only clear if we truly
+        // have no session after the initial check AND no cache existed.
+        if (!loadCachedProfile()) {
+          setProfileAndCache(null);
+        }
         finishInitial();
       }
     });
 
-    // Listen for auth changes (token refresh, sign in/out, initial session)
     const { data: listener } = supabase.auth.onAuthStateChange((event, newSession) => {
       if (!mountedRef.current) return;
       setSession(newSession);
 
-      if (newSession?.user) {
-        // Only reload profile if the user changed or we haven't loaded it yet
-        if (profileLoadedRef.current !== newSession.user.id) {
-          loadProfile(newSession.user.id);
-        }
-      } else {
+      if (event === 'SIGNED_OUT') {
+        // Explicit sign-out — this is the ONLY place we clear the cache.
         setProfileAndCache(null);
+        finishInitial();
+        return;
       }
 
-      if (event === 'INITIAL_SESSION') {
-        // getSession().then() will call finishInitial — don't finish here
-      } else {
+      if (event === 'TOKEN_REFRESHED' || event === 'SIGNED_IN') {
+        if (newSession?.user && profileLoadedRef.current !== newSession.user.id) {
+          loadProfile(newSession.user.id);
+        }
         finishInitial();
+        return;
       }
+
+      // INITIAL_SESSION and any other event: do NOT clear the cached profile.
+      // The cached profile is our source of truth until we get a real session.
+      if (newSession?.user && profileLoadedRef.current !== newSession.user.id) {
+        loadProfile(newSession.user.id);
+      }
+
+      finishInitial();
     });
 
     return () => {
