@@ -1,5 +1,7 @@
 import type { Category, Evaluation, StudentNote } from './types';
 
+export { getAcademyWeekYear, getCurrentWeekYear, getPreviousAcademyWeek } from './academy-week';
+
 /**
  * Compute the fill ratio (0..1) for each of 5 stars given points_deducted and max_points.
  * points = max_points - points_deducted (what the student earned).
@@ -20,15 +22,37 @@ export function computeStarFills(pointsDeducted: number, maxPoints: number = 25)
   return fills;
 }
 
+/** Exclude Hifz category deductions when student is not in a Hifz group. */
+export function filterEvaluationsForStudent(
+  evaluations: Evaluation[],
+  categories: Category[],
+  inHifzGroup: boolean
+): Evaluation[] {
+  if (inHifzGroup) return evaluations;
+  const hifzIds = new Set(categories.filter((c) => c.is_hifz).map((c) => c.id));
+  return evaluations.filter((e) => !hifzIds.has(e.category_id));
+}
+
 /**
- * Get the current week number and year for evaluation scoping.
+ * Compute course points excluding Hifz-only evaluations for non-Hifz students.
  */
-export function getCurrentWeekYear(): { weekNumber: number; year: number } {
-  const now = new Date();
-  const year = now.getFullYear();
-  const onejan = new Date(year, 0, 1);
-  const week = Math.ceil(((now.getTime() - onejan.getTime()) / 86400000 + onejan.getDay() + 1) / 7);
-  return { weekNumber: week, year };
+export function computeStudentScore(
+  courseIds: string[],
+  basePoints: number,
+  evaluations: Evaluation[],
+  notes: StudentNote[],
+  categories: Category[],
+  inHifzGroup: boolean
+): { points: number; pct: number } {
+  const filteredEvals = filterEvaluationsForStudent(evaluations, categories, inHifzGroup);
+  if (courseIds.length === 0) return { points: basePoints, pct: 100 };
+  const avg =
+    courseIds.reduce(
+      (sum, cid) => sum + computeCoursePoints(cid, basePoints, filteredEvals, notes),
+      0
+    ) / courseIds.length;
+  const points = Math.round(avg);
+  return { points, pct: Math.round((points / basePoints) * 100) };
 }
 
 /**

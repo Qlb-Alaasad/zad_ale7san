@@ -3,7 +3,8 @@ import { ClipboardList, Plus, Trash2, Save, X, Users, Filter, Edit } from 'lucid
 import { supabase } from '@/lib/supabase';
 import { createNotification } from '@/lib/notifications';
 import { formatDateArabic } from '@/lib/date';
-import { TASK_STATUS_LABELS, TASK_STATUS_COLORS, isTaskOverdue, normalizeTaskStatus } from '@/lib/tasks';
+import { TASK_STATUS_LABELS, TASK_STATUS_COLORS, isTaskOverdue, normalizeTaskStatus, getAllTasks, insertTasksForStudents } from '@/lib/tasks';
+import { verifyStudentProfileId } from '@/lib/student-id';
 import { Loading, EmptyState, Badge } from '@/components/ui';
 import { Modal } from '@/components/Modal';
 import type { Profile, Category, Task, TaskStatus } from '@/lib/types';
@@ -28,15 +29,15 @@ export function TasksTab() {
 
   const load = useCallback(async () => {
     setLoading(true);
-    const [{ data: profileData }, { data: catData }, { data: taskData }] = await Promise.all([
+    const [{ data: profileData }, { data: catData }, taskList] = await Promise.all([
       supabase.from('profiles').select('*').eq('role', 'student').eq('status', 'approved').order('full_name'),
       supabase.from('categories').select('*').order('name'),
-      supabase.from('tasks').select('*, category:categories(id, name)').order('created_at', { ascending: false }),
+      getAllTasks(),
     ]);
     const studentMap = Object.fromEntries((profileData as Profile[] || []).map((s) => [s.id, s]));
     setStudents(profileData as Profile[] || []);
     setCategories(catData as Category[] || []);
-    setTasks(((taskData as Task[]) || []).map((t) => ({ ...t, student: studentMap[t.student_id] })));
+    setTasks(taskList.map((t) => ({ ...t, student: studentMap[t.student_id] })));
     setLoading(false);
   }, []);
 
@@ -86,6 +87,14 @@ export function TasksTab() {
       const targets = bulkMode ? selectedStudentIds : studentId ? [studentId] : [];
       if (targets.length === 0) return;
 
+      for (const sid of targets) {
+        const valid = await verifyStudentProfileId(sid);
+        if (!valid) {
+          alert(`معرّف الطالب غير صالح: ${sid}. يجب أن يطابق profiles.id (نفس auth.users.id).`);
+          return;
+        }
+      }
+
       const rows = targets.map((sid) => ({
         student_id: sid,
         category_id: categoryId || null,
@@ -96,7 +105,11 @@ export function TasksTab() {
         completed: false,
       }));
 
-      await supabase.from('tasks').insert(rows);
+      const { ok, error } = await insertTasksForStudents(rows);
+      if (!ok) {
+        alert(`فشل إنشاء المهمة: ${error}`);
+        return;
+      }
       for (const sid of targets) {
         await createNotification(sid, 'مهمة جديدة', title.trim(), 'general');
       }

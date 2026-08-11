@@ -4,7 +4,8 @@ import { supabase } from '@/lib/supabase';
 import { useAuth } from '@/lib/auth';
 import { createNotification } from '@/lib/notifications';
 import { formatDateArabic } from '@/lib/date';
-import { financeSummary, PAYMENT_METHOD_LABELS } from '@/lib/finances';
+import { financeSummary, PAYMENT_METHOD_LABELS, getFinancialDuesForStudent, getFinancialPaymentsForStudent } from '@/lib/finances';
+import { verifyStudentProfileId } from '@/lib/student-id';
 import { Loading, EmptyState, Badge } from '@/components/ui';
 import { Modal } from '@/components/Modal';
 import type { Profile, Category, FinancialDue, FinancialPayment } from '@/lib/types';
@@ -41,12 +42,18 @@ export function FinancialTabPanel() {
   }, []);
 
   const loadStudentFinance = useCallback(async (studentId: string) => {
-    const [{ data: dueData }, { data: payData }] = await Promise.all([
-      supabase.from('financial_dues').select('*, category:categories(id, name)').eq('student_id', studentId).order('created_at', { ascending: false }),
-      supabase.from('financial_payments').select('*').eq('student_id', studentId).order('created_at', { ascending: false }),
+    const valid = await verifyStudentProfileId(studentId);
+    if (!valid) {
+      setDues([]);
+      setPayments([]);
+      return;
+    }
+    const [dueList, payList] = await Promise.all([
+      getFinancialDuesForStudent(studentId),
+      getFinancialPaymentsForStudent(studentId),
     ]);
-    setDues(dueData as FinancialDue[] || []);
-    setPayments(payData as FinancialPayment[] || []);
+    setDues(dueList);
+    setPayments(payList);
   }, []);
 
   useEffect(() => { load(); }, [load]);
@@ -78,7 +85,12 @@ export function FinancialTabPanel() {
 
   const addDue = async () => {
     if (!selected || !newDesc || !newAmount) return;
-    await supabase.from('financial_dues').insert({
+    const valid = await verifyStudentProfileId(selected.id);
+    if (!valid) {
+      alert('معرّف الطالب غير صالح — لا يمكن إضافة رسوم.');
+      return;
+    }
+    const { error } = await supabase.from('financial_dues').insert({
       student_id: selected.id,
       category_id: newCatId || null,
       description: newDesc,
@@ -86,6 +98,11 @@ export function FinancialTabPanel() {
       due_date: newDueDate || null,
       notes: newNotes,
     });
+    if (error) {
+      console.error('[finances] addDue insert failed:', error);
+      alert(`فشل إضافة الرسوم: ${error.message}`);
+      return;
+    }
     await createNotification(selected.id, 'رسوم جديدة', `${newDesc}: $${newAmount}`, 'financial');
     setNewDesc('');
     setNewAmount('');

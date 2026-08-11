@@ -50,6 +50,7 @@ export interface Category {
   name: string;
   description: string;
   max_points: number;
+  is_hifz?: boolean;
   created_at: string;
 }
 
@@ -172,5 +173,35 @@ export interface AppSettings {
   id: number;
   base_points: number;
   absence_deduction: number;
+  last_weekly_reset_at: string | null;
   updated_at: string;
+}
+
+export interface StudentGroup {
+  id: string;
+  name: string;
+  description: string;
+  is_hifz: boolean;
+  created_at: string;
+}
+
+export interface GroupEnrollment {
+  student_id: string;
+  group_id: string;
+  enrolled_at: string;
+}
+
+export interface EvaluationHistoryRecord {
+  id: string;
+  student_id: string;
+  week_number: number;
+  year: number;
+  week_start: string;
+  week_end: string;
+  evaluations: Evaluation[];
+  notes: StudentNote[];
+  attendance: Attendance[];
+  quran_progress: number | null;
+  current_module: string | null;
+  archived_at: string;
 }

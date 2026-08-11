@@ -11,11 +11,13 @@ import { DashboardLayout } from '@/components/DashboardLayout';
 import { Modal } from '@/components/Modal';
 import { Loading, EmptyState, Badge } from '@/components/ui';
 import { StarRating } from '@/components/StarRating';
-import { computeStarFills, getCategoryStars, getCurrentWeekYear, computeCoursePoints } from '@/lib/scoring';
+import { computeStarFills, getCategoryStars, getCurrentWeekYear, computeStudentScore, filterEvaluationsForStudent } from '@/lib/scoring';
+import { filterCategoriesForHifz, isStudentInHifzGroup } from '@/lib/groups';
 import { verifyQrPayload, sessionSecret } from '@/lib/qr';
 import { formatDateArabic, formatTimeArabic } from '@/lib/date';
-import { TASK_STATUS_LABELS, TASK_STATUS_COLORS, isTaskOverdue, normalizeTaskStatus, taskProgressPercent } from '@/lib/tasks';
-import { financeSummary, PAYMENT_METHOD_LABELS } from '@/lib/finances';
+import { TASK_STATUS_LABELS, TASK_STATUS_COLORS, isTaskOverdue, normalizeTaskStatus, taskProgressPercent, getTasksForStudent } from '@/lib/tasks';
+import { financeSummary, PAYMENT_METHOD_LABELS, getFinancialDuesForStudent, getFinancialPaymentsForStudent } from '@/lib/finances';
+import { resolveStudentId } from '@/lib/student-id';
 import type {
   Category, Evaluation, Session, FinancialDue, FinancialPayment, Task, TaskStatus,
   Attendance, StudentNote, Course, AppSettings,
@@ -24,7 +26,9 @@ import type {
 type PortalTab = 'home' | 'tasks' | 'finances' | 'progress';
 
 export default function StudentPortal() {
-  const { profile } = useAuth();
+  const { profile, session } = useAuth();
+  const [studentId, setStudentId] = useState<string | null>(null);
+  const [inHifzGroup, setInHifzGroup] = useState(false);
   const [portalTab, setPortalTab] = useState<PortalTab>('home');
   const [categories, setCategories] = useState<Category[]>([]);
   const [evaluations, setEvaluations] = useState<Evaluation[]>([]);
@@ -51,36 +55,54 @@ export default function StudentPortal() {
   const { weekNumber, year } = getCurrentWeekYear();
 
   const load = useCallback(async () => {
-    if (!profile) return;
-    const [
-      cats, evals, allEvals, sess, duesData, paymentsData, tasksData,
-      attData, notesData, courseData, enrollData, catEnrollData, settingsRes,
-    ] = await Promise.all([
+    const sid = await resolveStudentId(profile);
+    if (!sid) {
+      console.warn('[StudentPortal] load aborted — no student id');
+      setLoading(false);
+      return;
+    }
+    setStudentId(sid);
+    const hifz = await isStudentInHifzGroup(sid);
+    setInHifzGroup(hifz);
+
+    const [cats, evals, allEvals, sess, duesList, paymentsList, tasksList, attData, notesData, courseData, enrollData, catEnrollData, settingsRes] = await Promise.all([
       supabase.from('categories').select('*').order('name'),
-      supabase.from('evaluations').select('*, category:categories(*)').eq('student_id', profile.id).eq('week_number', weekNumber).eq('year', year),
-      supabase.from('evaluations').select('*, category:categories(*)').eq('student_id', profile.id).order('created_at', { ascending: false }),
+      supabase.from('evaluations').select('*, category:categories(*)').eq('student_id', sid).eq('week_number', weekNumber).eq('year', year),
+      supabase.from('evaluations').select('*, category:categories(*)').eq('student_id', sid).order('created_at', { ascending: false }),
       supabase.from('sessions').select('*').gte('end_time', new Date().toISOString()).order('start_time'),
-      supabase.from('financial_dues').select('*, category:categories(id, name)').eq('student_id', profile.id).order('created_at', { ascending: false }),
-      supabase.from('financial_payments').select('*').eq('student_id', profile.id).order('created_at', { ascending: false }),
-      supabase.from('tasks').select('*, category:categories(id, name)').eq('student_id', profile.id).order('created_at', { ascending: false }),
-      supabase.from('attendance').select('*, session:sessions(*)').eq('student_id', profile.id).order('created_at', { ascending: false }),
-      supabase.from('student_notes').select('*').eq('student_id', profile.id).order('created_at', { ascending: false }),
+      getFinancialDuesForStudent(sid),
+      getFinancialPaymentsForStudent(sid),
+      getTasksForStudent(sid),
+      supabase.from('attendance').select('*, session:sessions(*)').eq('student_id', sid).order('created_at', { ascending: false }),
+      supabase.from('student_notes').select('*').eq('student_id', sid).order('created_at', { ascending: false }),
       supabase.from('courses').select('*').order('title'),
-      supabase.from('student_courses').select('course_id').eq('student_id', profile.id),
-      supabase.from('student_categories').select('category_id').eq('student_id', profile.id),
+      supabase.from('student_courses').select('course_id').eq('student_id', sid),
+      supabase.from('student_categories').select('category_id').eq('student_id', sid),
       supabase.from('settings').select('*').eq('id', 1).maybeSingle(),
     ]);
 
+    if (catEnrollData.error) {
+      console.warn('[StudentPortal] student_categories fetch failed (tasks/dues still shown):', catEnrollData.error.message);
+    }
+
     const enrolledCatIds = new Set((catEnrollData.data || []).map((e: { category_id: string }) => e.category_id));
     const allCategories = (cats.data as Category[]) || [];
-    setCategories(allCategories.filter((c) => enrolledCatIds.has(c.id)));
-    setEvaluations((evals.data as Evaluation[] || []).filter((e) => !e.category_id || enrolledCatIds.has(e.category_id)));
-    const filteredAllEvals = (allEvals.data as Evaluation[] || []).filter((e) => !e.category_id || enrolledCatIds.has(e.category_id));
+    const visibleCategories = filterCategoriesForHifz(
+      allCategories.filter((c) => enrolledCatIds.has(c.id) || enrolledCatIds.size === 0),
+      hifz
+    );
+    setCategories(visibleCategories);
+
+    const rawEvals = (evals.data as Evaluation[] || []).filter((e) => !e.category_id || enrolledCatIds.has(e.category_id) || enrolledCatIds.size === 0);
+    const rawAllEvals = (allEvals.data as Evaluation[] || []).filter((e) => !e.category_id || enrolledCatIds.has(e.category_id) || enrolledCatIds.size === 0);
+    setEvaluations(filterEvaluationsForStudent(rawEvals, allCategories, hifz));
+    const filteredAllEvals = filterEvaluationsForStudent(rawAllEvals, allCategories, hifz);
     setAllEvaluations(filteredAllEvals);
     setSessions((sess.data as Session[] || []).filter((s) => !s.category_id || enrolledCatIds.has(s.category_id)));
-    setDues((duesData.data as FinancialDue[] || []).filter((d) => !d.category_id || enrolledCatIds.has(d.category_id)));
-    setPayments(paymentsData.data as FinancialPayment[] || []);
-    setTasks((tasksData.data as Task[] || []).filter((t) => !t.category_id || enrolledCatIds.has(t.category_id)));
+    // Tasks & dues: show all rows for this student_id (admin assigns directly; do not hide by category enrollment)
+    setDues(duesList);
+    setPayments(paymentsList);
+    setTasks(tasksList);
     setAttendance(attData.data as Attendance[] || []);
     setNotes(notesData.data as StudentNote[] || []);
     const allCourses = courseData.data as Course[] || [];
@@ -92,28 +114,30 @@ export default function StudentPortal() {
     setBasePoints(bp);
 
     const pointsMap: Record<string, number> = {};
-    for (const c of allCourses.filter((co) => enrolledIds.includes(co.id))) {
-      pointsMap[c.id] = computeCoursePoints(c.id, bp, filteredAllEvals, (notesData.data as StudentNote[]) || []);
+    const enrolledList = allCourses.filter((co) => enrolledIds.includes(co.id));
+    for (const c of enrolledList) {
+      const score = computeStudentScore([c.id], bp, filteredAllEvals, (notesData.data as StudentNote[]) || [], allCategories, hifz);
+      pointsMap[c.id] = score.points;
     }
     setCoursePoints(pointsMap);
     setLoading(false);
-  }, [profile, weekNumber, year]);
+  }, [profile, session, weekNumber, year]);
 
   useEffect(() => { load(); }, [load]);
 
   useEffect(() => {
-    if (!profile) return;
+    if (!studentId) return;
     const channel = supabase
       .channel('student-updates')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'evaluations', filter: `student_id=eq.${profile.id}` }, () => load())
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'financial_dues', filter: `student_id=eq.${profile.id}` }, () => load())
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'financial_payments', filter: `student_id=eq.${profile.id}` }, () => load())
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'tasks', filter: `student_id=eq.${profile.id}` }, () => load())
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'evaluations', filter: `student_id=eq.${studentId}` }, () => load())
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'financial_dues', filter: `student_id=eq.${studentId}` }, () => load())
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'financial_payments', filter: `student_id=eq.${studentId}` }, () => load())
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'tasks', filter: `student_id=eq.${studentId}` }, () => load())
       .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'sessions' }, () => load())
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'attendance', filter: `student_id=eq.${profile.id}` }, () => load())
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'attendance', filter: `student_id=eq.${studentId}` }, () => load())
       .subscribe();
     return () => { supabase.removeChannel(channel); };
-  }, [profile, load]);
+  }, [studentId, load]);
 
   const updateTaskStatus = async (task: Task, status: TaskStatus, extra: Record<string, unknown> = {}) => {
     await supabase.from('tasks').update({
@@ -168,7 +192,8 @@ export default function StudentPortal() {
   };
 
   const handleScan = async (payload: string) => {
-    if (!profile || isScanningPaused.current) return;
+    const sid = studentId ?? (await resolveStudentId(profile));
+    if (!sid || isScanningPaused.current) return;
     isScanningPaused.current = true;
     try {
       const parsed = JSON.parse(payload);
@@ -179,7 +204,7 @@ export default function StudentPortal() {
         return;
       }
       const sessionId = verifyResult.sessionId;
-      const { data: existing } = await supabase.from('attendance').select('*').eq('student_id', profile.id).eq('session_id', sessionId).maybeSingle();
+      const { data: existing } = await supabase.from('attendance').select('*').eq('student_id', sid).eq('session_id', sessionId).maybeSingle();
       if (existing) {
         setScanResult({ success: false, message: 'تم تسجيل حضورك مسبقاً لهذه الحصة' });
         isScanningPaused.current = false;
@@ -200,7 +225,7 @@ export default function StudentPortal() {
       const start = sessionRow.start_time ? new Date(sessionRow.start_time) : now;
       const lateThreshold = new Date(start.getTime() + 15 * 60000);
       const status = now > lateThreshold ? 'late' : 'present';
-      await supabase.from('attendance').insert({ student_id: profile.id, session_id: sessionId, status, points_deducted: 0 });
+      await supabase.from('attendance').insert({ student_id: sid, session_id: sessionId, status, points_deducted: 0 });
       setScanResult({ success: true, message: status === 'late' ? 'تم تسجيل حضورك (متأخر)' : 'تم تسجيل الحضور بنجاح' });
       setShowSuccessOverlay(true);
       load();
@@ -229,10 +254,17 @@ export default function StudentPortal() {
   if (loading) return <DashboardLayout navItems={navItems}><Loading /></DashboardLayout>;
 
   const categoryStars = getCategoryStars(categories, evaluations);
-  const overallPoints = enrolledCourses.length > 0
-    ? Math.round(enrolledCourses.reduce((sum, c) => sum + (coursePoints[c.id] ?? basePoints), 0) / enrolledCourses.length)
-    : basePoints;
-  const overallPct = Math.round((overallPoints / basePoints) * 100);
+  const enrolledCourseIds = enrolledCourses.map((c) => c.id);
+  const overallScore = computeStudentScore(
+    enrolledCourseIds,
+    basePoints,
+    allEvaluations,
+    notes,
+    categories,
+    inHifzGroup
+  );
+  const overallPoints = enrolledCourseIds.length > 0 ? overallScore.points : basePoints;
+  const overallPct = overallScore.pct;
   const finance = financeSummary(dues, payments);
   const pendingTasks = tasks.filter((t) => normalizeTaskStatus(t) !== 'completed');
   const overdueTasks = tasks.filter((t) => isTaskOverdue(t));
@@ -303,7 +335,7 @@ export default function StudentPortal() {
             <div className="card">
               <BookOpen className="w-6 h-6 text-forest-700 mb-2" />
               <p className="font-bold text-forest-900">{enrolledCourses.length} دورة</p>
-              <p className="text-xs text-charcoal-400">حفظ: {profile?.quran_progress}%</p>
+              {inHifzGroup && <p className="text-xs text-charcoal-400">حفظ: {profile?.quran_progress}%</p>}
             </div>
             <div className="card">
               <Award className="w-6 h-6 text-gold-500 mb-2" />
@@ -542,6 +574,9 @@ export default function StudentPortal() {
 
           <div>
             <h2 className="text-lg font-bold text-forest-900 mb-3">تقييمات هذا الأسبوع</h2>
+            {categoryStars.length === 0 ? (
+              <p className="text-sm text-charcoal-500">لا توجد فئات تقييم نشطة لحسابك.</p>
+            ) : (
             <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-3">
               {categoryStars.map(({ category, fills, pointsDeducted }) => {
                 const activePoints = Math.max(0, category.max_points - pointsDeducted);
@@ -556,8 +591,10 @@ export default function StudentPortal() {
                 );
               })}
             </div>
+            )}
           </div>
 
+          {inHifzGroup && (
           <div className="card">
             <h3 className="font-bold text-forest-900 mb-3">تتبع الحفظ</h3>
             <div className="h-3 bg-cream-200 rounded-full overflow-hidden mb-2">
@@ -565,6 +602,7 @@ export default function StudentPortal() {
             </div>
             <p className="text-sm text-charcoal-500">{profile?.quran_progress}% — {profile?.current_module || 'لم تحدد بعد'}</p>
           </div>
+          )}
 
           {upcomingSessions.length > 0 && (
             <div className="card">

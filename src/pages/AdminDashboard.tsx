@@ -6,20 +6,31 @@ import { DashboardLayout } from '@/components/DashboardLayout';
 import { Modal } from '@/components/Modal';
 import { Loading, EmptyState, Badge } from '@/components/ui';
 import { StarRating } from '@/components/StarRating';
-import { computeStarFills, getCurrentWeekYear, getCategoryStars, computeCoursePoints } from '@/lib/scoring';
+import { computeStarFills, getCurrentWeekYear, getCategoryStars, computeStudentScore, filterEvaluationsForStudent } from '@/lib/scoring';
+import { getAcademyWeekYear } from '@/lib/academy-week';
+import { isStudentInHifzGroup } from '@/lib/groups';
 import { generateQrPayload, sessionSecret } from '@/lib/qr';
 import { createNotification } from '@/lib/notifications';
 import { formatDateArabic, formatTimeArabic } from '@/lib/date';
 import type { Profile, Course, Category, Evaluation, Session, FinancialDue, Task, Attendance, StudentNote, NoteType, AppSettings } from '@/lib/types';
 import { TasksTab } from '@/components/admin/TasksTab';
 import { FinancialTabPanel } from '@/components/admin/FinancialTabPanel';
+import { GroupsTab } from '@/components/admin/GroupsTab';
+import { StudentHistoryViewer } from '@/components/admin/StudentHistoryViewer';
+import { maybeRunWeeklyEvaluationReset } from '@/lib/evaluation-history';
 import QRCode from 'qrcode';
 
-type Tab = 'overview' | 'approvals' | 'students' | 'attendance' | 'evaluations' | 'tasks' | 'financial' | 'categories' | 'settings';
+type Tab = 'overview' | 'approvals' | 'students' | 'groups' | 'attendance' | 'evaluations' | 'tasks' | 'financial' | 'categories' | 'settings';
 
 export default function AdminDashboard() {
   const [tab, setTab] = useState<Tab>('overview');
   const { profile } = useAuth();
+
+  useEffect(() => {
+    if (profile?.role === 'admin') {
+      maybeRunWeeklyEvaluationReset();
+    }
+  }, [profile?.role]);
 
   const navItems = [
     { path: '/admin', label: 'الرئيسية', icon: <Users className="w-5 h-5" /> },
@@ -38,6 +49,7 @@ export default function AdminDashboard() {
           ['overview', 'نظرة عامة', <Users className="w-4 h-4" />],
           ['approvals', 'الموافقات', <ClipboardCheck className="w-4 h-4" />],
           ['students', 'الطلاب', <GraduationCap className="w-4 h-4" />],
+          ['groups', 'الشُعب', <Users className="w-4 h-4" />],
           ['attendance', 'الحضور', <QrCode className="w-4 h-4" />],
           ['evaluations', 'التقييمات', <Star className="w-4 h-4" />],
           ['tasks', 'المهام', <ClipboardCheck className="w-4 h-4" />],
@@ -59,6 +71,7 @@ export default function AdminDashboard() {
       {tab === 'overview' && <OverviewTab />}
       {tab === 'approvals' && <ApprovalsTab />}
       {tab === 'students' && <StudentsTab />}
+      {tab === 'groups' && <GroupsTab />}
       {tab === 'attendance' && <AttendanceTab />}
       {tab === 'evaluations' && <EvaluationsTab />}
       {tab === 'tasks' && <TasksTab />}
@@ -491,14 +504,15 @@ function StudentsTab() {
 
   const load = useCallback(async () => {
     setLoading(true);
-    const [{ data: userData }, { data: courseData }, { data: enrollData }, { data: evalData }, { data: noteData }, { data: catData }, { data: settingsData }] = await Promise.all([
+    const [{ data: userData }, { data: courseData }, { data: enrollData }, { data: evalData }, { data: noteData }, { data: catData }, { data: settingsData }, { data: hifzEnrollData }] = await Promise.all([
       supabase.from('profiles').select('*').order('created_at', { ascending: false }),
       supabase.from('courses').select('*').order('title'),
       supabase.from('student_courses').select('student_id, course_id'),
       supabase.from('evaluations').select('*'),
       supabase.from('student_notes').select('*'),
       supabase.from('categories').select('*'),
-      supabase.from('app_settings').select('*').limit(1).maybeSingle(),
+      supabase.from('settings').select('*').eq('id', 1).maybeSingle(),
+      supabase.from('group_enrollments').select('student_id, student_groups(is_hifz)'),
     ]);
     setUsers(userData as Profile[] || []);
     setCourses(courseData as Course[] || []);
@@ -512,12 +526,28 @@ function StudentsTab() {
     const basePoints = (settingsData as AppSettings | null)?.base_points ?? 100;
     const evals = (evalData || []) as Evaluation[];
     const notes = (noteData || []) as StudentNote[];
+    const cats = (catData || []) as Category[];
+    const hifzStudentIds = new Set(
+      (hifzEnrollData || [])
+        .filter((row: { student_groups: { is_hifz: boolean } | { is_hifz: boolean }[] | null }) => {
+          const g = row.student_groups;
+          const group = Array.isArray(g) ? g[0] : g;
+          return group?.is_hifz;
+        })
+        .map((row: { student_id: string }) => row.student_id)
+    );
     const scores: Record<string, { points: number; pct: number }> = {};
     for (const u of (userData as Profile[] || [])) {
       const cids = map[u.id] || [];
       if (cids.length === 0) continue;
-      const avg = cids.reduce((sum, cid) => sum + computeCoursePoints(cid, basePoints, evals.filter(e => e.student_id === u.id), notes.filter(n => n.student_id === u.id)), 0) / cids.length;
-      scores[u.id] = { points: Math.round(avg), pct: Math.round((avg / basePoints) * 100) };
+      scores[u.id] = computeStudentScore(
+        cids,
+        basePoints,
+        evals.filter((e) => e.student_id === u.id),
+        notes.filter((n) => n.student_id === u.id),
+        cats,
+        hifzStudentIds.has(u.id)
+      );
     }
     setStudentScores(scores);
     setLoading(false);
@@ -705,6 +735,10 @@ function StudentsTab() {
             {/* Student notes (supervisor + auto-absence) */}
             {selected.role === 'student' && (
               <StudentNotesSection studentId={selected.id} courses={courses} />
+            )}
+
+            {selected.role === 'student' && (
+              <StudentHistoryViewer studentId={selected.id} studentName={selected.full_name} />
             )}
           </div>
         )}
@@ -1319,7 +1353,9 @@ function EvaluationsTab() {
   const [loading, setLoading] = useState(true);
   const [selectedStudent, setSelectedStudent] = useState<Profile | null>(null);
   const [editValues, setEditValues] = useState<Record<string, { deducted: number; note: string }>>({});
+  const [studentHifz, setStudentHifz] = useState(false);
   const { weekNumber, year } = getCurrentWeekYear();
+  const academyWeek = getAcademyWeekYear();
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -1345,7 +1381,10 @@ function EvaluationsTab() {
   }, [weekNumber, year]);
 
   useEffect(() => {
-    if (selectedStudent) loadEvaluations(selectedStudent.id);
+    if (selectedStudent) {
+      loadEvaluations(selectedStudent.id);
+      isStudentInHifzGroup(selectedStudent.id).then(setStudentHifz);
+    }
   }, [selectedStudent, loadEvaluations]);
 
   const saveEvaluation = async (categoryId: string) => {
@@ -1407,11 +1446,11 @@ function EvaluationsTab() {
           </button>
           <h3 className="text-lg font-bold text-forest-900">تقييم: {selectedStudent.full_name}</h3>
         </div>
-        <Badge color="gold">الأسبوع {weekNumber} - {year}</Badge>
+        <Badge color="gold">أسبوع {weekNumber} — {academyWeek.weekStart} → {academyWeek.weekEnd}</Badge>
       </div>
 
       <div className="space-y-3">
-        {categories.map((cat) => {
+        {categories.filter((c) => studentHifz || !c.is_hifz).map((cat) => {
           const val = editValues[cat.id] || { deducted: 0, note: '' };
           const fills = computeStarFills(val.deducted, cat.max_points);
           return (
@@ -1503,6 +1542,7 @@ function CategoriesTab() {
                 <p className="font-bold text-forest-900">{c.name}</p>
                 <p className="text-sm text-charcoal-500">{c.description}</p>
                 <Badge color="gold">الحد الأقصى: {c.max_points} نقطة</Badge>
+                {c.is_hifz && <Badge color="forest">حفظ</Badge>}
               </div>
               <div className="flex gap-1">
                 <button onClick={() => setManagedCategory(c)} className="p-1.5 rounded-lg hover:bg-forest-50 text-forest-700" title="إدارة المهام والرسوم">
@@ -1746,14 +1786,16 @@ function CategoryForm({ category, onClose, onSaved }: { category: Category | nul
   const [name, setName] = useState(category?.name || '');
   const [description, setDescription] = useState(category?.description || '');
   const [maxPoints, setMaxPoints] = useState(category?.max_points || 25);
+  const [isHifz, setIsHifz] = useState(category?.is_hifz ?? false);
   const [saving, setSaving] = useState(false);
 
   const save = async () => {
     setSaving(true);
+    const payload = { name, description, max_points: maxPoints, is_hifz: isHifz };
     if (category) {
-      await supabase.from('categories').update({ name, description, max_points: maxPoints }).eq('id', category.id);
+      await supabase.from('categories').update(payload).eq('id', category.id);
     } else {
-      await supabase.from('categories').insert({ name, description, max_points: maxPoints });
+      await supabase.from('categories').insert(payload);
     }
     setSaving(false);
     onSaved();
@@ -1774,6 +1816,10 @@ function CategoryForm({ category, onClose, onSaved }: { category: Category | nul
           <label className="label">الحد الأقصى للنقاط</label>
           <input type="number" value={maxPoints} onChange={(e) => setMaxPoints(parseInt(e.target.value) || 25)} className="input" />
         </div>
+        <label className="flex items-center gap-2 text-sm">
+          <input type="checkbox" checked={isHifz} onChange={(e) => setIsHifz(e.target.checked)} />
+          فئة حفظ / قرآن (تُخفى عن غير مسجّلي شعبة الحفظ)
+        </label>
         <button onClick={save} disabled={saving || !name} className="btn btn-primary w-full">
           <Save className="w-4 h-4" />
           حفظ

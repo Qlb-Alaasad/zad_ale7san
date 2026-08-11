@@ -31,6 +31,24 @@
 - Full user management — view all profiles, change roles (student ↔ admin), change account status
 - Manage course enrollments per student
 - View/edit supervisor & auto-absence notes
+- **Historical archive viewer**: inspect any archived academy week (evaluations, notes, attendance, Quran progress snapshot)
+
+#### Groups (الشُعب والقروبات) — **NEW**
+- Create custom student groups/classes (e.g. "شعبة الشيخ أحمد")
+- Mark groups as **Hifz / قرآn** to enable Quran tracking modules for members
+- **Bulk actions** on multi-selected students:
+  - Assign to a group/class
+  - Enroll in multiple courses at once
+  - Mass-approve accounts
+- Default seeded group: **الحفظ / القرآن**
+
+#### Weekly Evaluation Cycle (Friday Reset) — **NEW**
+- Academy week runs **Friday 00:00 → Thursday 23:59**
+- On each Friday, when admin opens the dashboard, the system automatically:
+  1. Archives the ending week's evaluations, notes, attendance, and Quran progress into `student_evaluation_history`
+  2. Clears live `evaluations` rows for that week (fresh start)
+- Tracked via `settings.last_weekly_reset_at` to prevent duplicate runs
+- Admin **Evaluations** tab displays current academy week date range
 
 #### Attendance
 - Start a session from any course with a live countdown timer
@@ -42,6 +60,7 @@
 - Weekly per-student evaluation across configurable categories
 - Slider-based points deduction with live star rating preview
 - Per-category notes that notify the student
+- **Hifz categories** (`categories.is_hifz`) only shown for students in a Hifz group
 
 #### Tasks (المهام) — **NEW**
 - Dedicated **Tasks tab** for academy-wide assignment management
@@ -63,6 +82,7 @@
 
 #### Categories
 - Create, edit, and delete evaluation categories with custom names, descriptions, and max points
+- **Hifz flag** (`is_hifz`) marks Quran/memorization categories — hidden from non-Hifz students
 - Per-category student enrollment via `student_categories`
 - Per-student task and due management within each category
 
@@ -99,11 +119,20 @@ The student portal now uses a **tabbed interface** with four sections:
 
 #### 4. Progress (التقدم)
 - Enrolled courses with per-course point bars
-- Weekly star ratings by evaluation category
-- Quran memorization progress tracker
+- Weekly star ratings by evaluation category (**Hifz categories excluded** if not in Hifz group)
+- **Quran memorization tracker** — visible **only** for students in a Hifz group
 - Upcoming matches/events
 - Attendance history
-- Historical evaluation archive
+- Historical evaluation archive (live week + archived weeks via admin)
+
+### Conditional Hifz UI — **NEW**
+
+| Student in Hifz group? | Quran progress UI | Hifz star categories | Hifz evals affect GPA |
+|---|---|---|---|
+| Yes | Shown | Shown | Yes |
+| No | Hidden | Hidden | No — excluded from `computeStudentScore` |
+
+Group membership is determined via `group_enrollments` → `student_groups.is_hifz`.
 
 #### QR Attendance (available from Home)
 - Camera-based QR scanner with success overlay and cooldown
@@ -135,15 +164,18 @@ The student portal now uses a **tabbed interface** with four sections:
 
 ## Database Schema
 
-### Tables (14 total)
+### Tables (17 total)
 
 | Table | Purpose |
 |---|---|
 | `profiles` | User profiles — role, status, Quran progress, current module |
 | `courses` | Academy courses with structured scheduling |
 | `student_courses` | Join table linking students to courses |
-| `student_categories` | **NEW** — links students to evaluation categories |
-| `categories` | Evaluation categories with configurable max points |
+| `student_categories` | Links students to evaluation categories |
+| `student_groups` | **NEW** — custom classes/sections with optional Hifz flag |
+| `group_enrollments` | **NEW** — many-to-many student ↔ group |
+| `student_evaluation_history` | **NEW** — archived weekly snapshots (Friday reset) |
+| `categories` | Evaluation categories with `is_hifz` flag and max points |
 | `evaluations` | Per-student, per-category, per-week evaluation records |
 | `sessions` | Class/match/event sessions with active flag |
 | `attendance` | Student attendance per session |
@@ -247,6 +279,9 @@ interface FinancialPayment {
 ### Utility Modules
 | Module | Purpose |
 |---|---|
+| `src/lib/academy-week.ts` | **NEW** — Friday-based academy week bounds and numbering |
+| `src/lib/evaluation-history.ts` | **NEW** — weekly archive + Friday auto-reset |
+| `src/lib/groups.ts` | **NEW** — group CRUD, bulk assign, Hifz checks |
 | `src/lib/auth.tsx` | Auth context with session/profile cache |
 | `src/lib/supabase.ts` | Supabase client with localStorage persistence |
 | `src/lib/types.ts` | TypeScript definitions for all tables |
@@ -258,7 +293,8 @@ interface FinancialPayment {
 | `src/lib/date.ts` | Arabic date/time formatting |
 
 ### Migrations
-- `20260811080000_tasks_finances_portal_enhancements.sql` — student_categories, task status/submission columns, financial_payments ledger, student task update RLS
+- `20260811080000_tasks_finances_portal_enhancements.sql` — task status, payment ledger, student_categories
+- `20260811100000_groups_history_weekly_reset.sql` — **NEW** — student_groups, group_enrollments, student_evaluation_history, categories.is_hifz, settings.last_weekly_reset_at
 
 ### Build & Deploy
 - `npm run build` — Vite production build
