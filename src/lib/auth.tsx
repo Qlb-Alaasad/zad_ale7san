@@ -83,9 +83,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         profileLoadedRef.current = null;
       }
 
-      // The INITIAL_SESSION event fires synchronously alongside getSession()
-      // — mark loading as done so the app can render
+      // After the initial session is restored, keep loading=true until
+      // getSession() also finishes (it loads the profile). This prevents
+      // a flash where the app renders with no profile and redirects to /login.
       if (event === 'INITIAL_SESSION') {
+        // getSession().then() will call finishInitial — don't finish here
+        // if getSession hasn't resolved yet.
+      } else {
         finishInitial();
       }
     });
