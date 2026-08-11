@@ -3,6 +3,7 @@ export type UserStatus = 'pending' | 'approved' | 'rejected';
 export type AttendanceStatus = 'present' | 'late' | 'absent';
 export type SessionType = 'class' | 'match' | 'event';
 export type DueStatus = 'unpaid' | 'paid';
+export type TaskStatus = 'assigned' | 'in_progress' | 'submitted' | 'completed';
 export type NotificationType = 'general' | 'note' | 'schedule' | 'financial' | 'attendance';
 
 export interface Profile {
@@ -35,6 +36,12 @@ export interface Course {
 export interface StudentCourse {
   student_id: string;
   course_id: string;
+  enrolled_at: string;
+}
+
+export interface StudentCategory {
+  student_id: string;
+  category_id: string;
   enrolled_at: string;
 }
 
@@ -92,7 +99,22 @@ export interface FinancialDue {
   description: string;
   amount: number;
   status: DueStatus;
+  due_date: string | null;
+  notes: string;
   created_at: string;
+  category?: Category;
+}
+
+export interface FinancialPayment {
+  id: string;
+  student_id: string;
+  due_id: string | null;
+  amount: number;
+  payment_method: string;
+  notes: string;
+  recorded_by: string | null;
+  created_at: string;
+  due?: FinancialDue;
 }
 
 export interface Task {
@@ -102,8 +124,14 @@ export interface Task {
   title: string;
   description: string;
   due_date: string | null;
+  status: TaskStatus;
   completed: boolean;
+  submission_text: string;
+  submitted_at: string | null;
+  updated_at: string;
   created_at: string;
+  category?: Category;
+  student?: Profile;
 }
 
 export interface Notification {

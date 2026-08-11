@@ -10,10 +10,12 @@ import { computeStarFills, getCurrentWeekYear, getCategoryStars, computeCoursePo
 import { generateQrPayload, sessionSecret } from '@/lib/qr';
 import { createNotification } from '@/lib/notifications';
 import { formatDateArabic, formatTimeArabic } from '@/lib/date';
-import type { Profile, Course, Category, Evaluation, Session, FinancialDue, Task, Attendance, StudentNote, NoteType } from '@/lib/types';
+import type { Profile, Course, Category, Evaluation, Session, FinancialDue, Task, Attendance, StudentNote, NoteType, AppSettings } from '@/lib/types';
+import { TasksTab } from '@/components/admin/TasksTab';
+import { FinancialTabPanel } from '@/components/admin/FinancialTabPanel';
 import QRCode from 'qrcode';
 
-type Tab = 'overview' | 'approvals' | 'students' | 'attendance' | 'evaluations' | 'financial' | 'categories' | 'settings';
+type Tab = 'overview' | 'approvals' | 'students' | 'attendance' | 'evaluations' | 'tasks' | 'financial' | 'categories' | 'settings';
 
 export default function AdminDashboard() {
   const [tab, setTab] = useState<Tab>('overview');
@@ -38,6 +40,7 @@ export default function AdminDashboard() {
           ['students', 'الطلاب', <GraduationCap className="w-4 h-4" />],
           ['attendance', 'الحضور', <QrCode className="w-4 h-4" />],
           ['evaluations', 'التقييمات', <Star className="w-4 h-4" />],
+          ['tasks', 'المهام', <ClipboardCheck className="w-4 h-4" />],
           ['categories', 'الفئات', <Award className="w-4 h-4" />],
           ['financial', 'المالية', <DollarSign className="w-4 h-4" />],
           ['settings', 'الإعدادات', <Settings className="w-4 h-4" />],
@@ -58,8 +61,9 @@ export default function AdminDashboard() {
       {tab === 'students' && <StudentsTab />}
       {tab === 'attendance' && <AttendanceTab />}
       {tab === 'evaluations' && <EvaluationsTab />}
+      {tab === 'tasks' && <TasksTab />}
       {tab === 'categories' && <CategoriesTab />}
-      {tab === 'financial' && <FinancialTab />}
+      {tab === 'financial' && <FinancialTabPanel />}
       {tab === 'settings' && <SettingsTab />}
     </DashboardLayout>
   );
@@ -1557,6 +1561,8 @@ function CategoryManage({ category, onBack }: { category: Category; onBack: () =
       title: newTaskTitle,
       description: newTaskDesc,
       due_date: newTaskDue || null,
+      status: 'assigned',
+      completed: false,
     });
     await createNotification(selectedStudent.id, 'مهمة جديدة', `${newTaskTitle} — ${category.name}`, 'general');
     setNewTaskTitle('');
@@ -1566,7 +1572,12 @@ function CategoryManage({ category, onBack }: { category: Category; onBack: () =
   };
 
   const toggleTask = async (task: Task) => {
-    await supabase.from('tasks').update({ completed: !task.completed }).eq('id', task.id);
+    const nextCompleted = !task.completed;
+    await supabase.from('tasks').update({
+      completed: nextCompleted,
+      status: nextCompleted ? 'completed' : 'assigned',
+      updated_at: new Date().toISOString(),
+    }).eq('id', task.id);
     load();
   };
 
@@ -1769,164 +1780,6 @@ function CategoryForm({ category, onClose, onSaved }: { category: Category | nul
         </button>
       </div>
     </Modal>
-  );
-}
-
-// ============ FINANCIAL ============
-function FinancialTab() {
-  const [students, setStudents] = useState<Profile[]>([]);
-  const [dues, setDues] = useState<FinancialDue[]>([]);
-  const [categories, setCategories] = useState<Category[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [selected, setSelected] = useState<Profile | null>(null);
-  const [showAdd, setShowAdd] = useState(false);
-  const [newDesc, setNewDesc] = useState('');
-  const [newAmount, setNewAmount] = useState('');
-  const [newCatId, setNewCatId] = useState('');
-
-  const load = useCallback(async () => {
-    setLoading(true);
-    const [{ data: profileData }, { data: catData }] = await Promise.all([
-      supabase.from('profiles').select('*').eq('role', 'student').eq('status', 'approved').order('full_name'),
-      supabase.from('categories').select('*').order('name'),
-    ]);
-    setStudents(profileData as Profile[] || []);
-    setCategories(catData as Category[] || []);
-    setLoading(false);
-  }, []);
-
-  useEffect(() => { load(); }, [load]);
-
-  const loadDues = useCallback(async (studentId: string) => {
-    const { data } = await supabase.from('financial_dues').select('*').eq('student_id', studentId).order('created_at', { ascending: false });
-    setDues(data as FinancialDue[] || []);
-  }, []);
-
-  useEffect(() => {
-    if (selected) loadDues(selected.id);
-  }, [selected, loadDues]);
-
-  const togglePaid = async (due: FinancialDue) => {
-    const newStatus = due.status === 'unpaid' ? 'paid' : 'unpaid';
-    await supabase.from('financial_dues').update({ status: newStatus }).eq('id', due.id);
-    if (newStatus === 'paid' && selected) {
-      await createNotification(selected.id, 'تحديث مالي', `تم تسديد "${due.description}" بمبلغ $${due.amount}`, 'financial');
-    }
-    if (selected) loadDues(selected.id);
-  };
-
-  const addDue = async () => {
-    if (!selected || !newDesc || !newAmount) return;
-    await supabase.from('financial_dues').insert({
-      student_id: selected.id,
-      category_id: newCatId || null,
-      description: newDesc,
-      amount: parseFloat(newAmount),
-    });
-    await createNotification(selected.id, 'رسوم جديدة', `${newDesc}: ${newAmount}`, 'financial');
-    setNewDesc('');
-    setNewAmount('');
-    setNewCatId('');
-    setShowAdd(false);
-    loadDues(selected.id);
-  };
-
-  const deleteDue = async (id: string) => {
-    await supabase.from('financial_dues').delete().eq('id', id);
-    if (selected) loadDues(selected.id);
-  };
-
-  if (loading) return <Loading />;
-
-  if (!selected) {
-    return (
-      <div className="space-y-4">
-        <h3 className="text-lg font-bold text-forest-900">الإدارة المالية — اختر الطالب</h3>
-        <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-3">
-          {students.map((s) => (
-            <button key={s.id} onClick={() => setSelected(s)} className="card text-right hover:shadow-lg transition-shadow">
-              <p className="font-bold text-forest-900">{s.full_name}</p>
-            </button>
-          ))}
-        </div>
-      </div>
-    );
-  }
-
-  const totalUnpaid = dues.filter((d) => d.status === 'unpaid').reduce((s, d) => s + Number(d.amount), 0);
-
-  return (
-    <div className="space-y-4">
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-3">
-          <button onClick={() => setSelected(null)} className="btn btn-outline text-sm">
-            <X className="w-4 h-4" />
-            رجوع
-          </button>
-          <h3 className="text-lg font-bold text-forest-900">{selected.full_name}</h3>
-        </div>
-        <button onClick={() => setShowAdd(true)} className="btn btn-gold text-sm">
-          <Plus className="w-4 h-4" />
-          إضافة رسوم
-        </button>
-      </div>
-
-      <div className="card bg-forest-900 text-cream-50">
-        <p className="text-cream-300 text-sm">إجمالي المستحقات غير المدفوعة</p>
-        <p className="text-3xl font-bold text-gold-400">${totalUnpaid}</p>
-      </div>
-
-      {dues.length === 0 ? (
-        <EmptyState icon={<DollarSign className="w-8 h-8" />} title="لا توجد رسوم" />
-      ) : (
-        <div className="space-y-2">
-          {dues.map((d) => (
-            <div key={d.id} className="card flex items-center justify-between">
-              <div>
-                <p className="font-medium text-forest-900">{d.description}</p>
-                <p className="text-sm text-charcoal-500">${d.amount} • {formatDateArabic(d.created_at)}</p>
-              </div>
-              <div className="flex items-center gap-2">
-                <button onClick={() => togglePaid(d)} className={`badge cursor-pointer ${d.status === 'unpaid' ? 'bg-red-100 text-red-700' : 'bg-green-100 text-green-700'}`}>
-                  {d.status === 'unpaid' ? 'غير مدفوع' : 'مدفوع'}
-                </button>
-                <button onClick={() => deleteDue(d.id)} className="p-1.5 rounded-lg hover:bg-red-50 text-red-500">
-                  <Trash2 className="w-4 h-4" />
-                </button>
-              </div>
-            </div>
-          ))}
-        </div>
-      )}
-
-      {showAdd && (
-        <Modal open onClose={() => setShowAdd(false)} title="إضافة رسوم جديدة">
-          <div className="space-y-4">
-            <div>
-              <label className="label">الوصف</label>
-              <input value={newDesc} onChange={(e) => setNewDesc(e.target.value)} className="input" placeholder="مثال: حجز ملعب" />
-            </div>
-            <div>
-              <label className="label">المبلغ ($)</label>
-              <input type="number" step="0.01" value={newAmount} onChange={(e) => setNewAmount(e.target.value)} className="input" placeholder="2.00" />
-            </div>
-            <div>
-              <label className="label">الفئة (اختياري)</label>
-              <select value={newCatId} onChange={(e) => setNewCatId(e.target.value)} className="input">
-                <option value="">— بدون فئة —</option>
-                {categories.map((c) => (
-                  <option key={c.id} value={c.id}>{c.name}</option>
-                ))}
-              </select>
-            </div>
-            <button onClick={addDue} disabled={!newDesc || !newAmount} className="btn btn-primary w-full">
-              <Save className="w-4 h-4" />
-              حفظ
-            </button>
-          </div>
-        </Modal>
-      )}
-    </div>
   );
 }
 

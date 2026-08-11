@@ -15,126 +15,210 @@
 - Pending and rejected account pages with clear status messaging
 - Password change in admin settings
 - Protected route guards: redirects by role (admin → dashboard, student → portal) and status (pending/rejected → pending page)
-- Session persistence with auto-refresh tokens
+- Session persistence with `localStorage` profile cache and auto-refresh tokens
 
 ### Admin Dashboard (Sheikh's Panel)
-- **Overview tab**: live stats (pending students, approved students, course count, unpaid dues total) and a performance leaderboard ranked by lowest points deducted + highest attendance
-- **Approvals tab**: review pending student registrations with one-click approve/reject; approval sends a welcome notification to the student
-- **Students tab**: full user management — view all profiles, change roles (student ↔ admin), change account status (pending/approved/rejected), manage course enrollments per student, and view/edit supervisor & auto-absence notes
-- **Courses tab**: create, edit, and delete courses with structured weekly scheduling (day-of-week picker, start/end times, session duration, total session count, time notes, supervisor notes); create and manage sessions (classes, matches, events) with date/time/location
-- **Attendance tab**: start a session from any course with a live countdown timer; displays a dynamic QR code that regenerates every 60 seconds; live attendance roster with manual override (present/late/absent); pause/resume timer; auto-absence marking when the timer ends (absent students get an attendance record, an absence note, and a notification)
-- **Evaluations tab**: weekly per-student evaluation across configurable categories; slider-based points deduction with live star rating preview; per-category notes that notify the student
-- **Categories tab**: create, edit, and delete evaluation categories with custom names, descriptions, and max points
-- **Financial tab**: per-student financial dues management — add dues, toggle paid/unpaid, delete dues; outstanding balance summary card; payment notifications sent to students
-- **Settings tab**: change admin account password
 
-### Student Portal
-- **Overview**: personal profile summary with Quran progress percentage, current module, and weekly star ratings across all evaluation categories
-- **Attendance**: QR code scanner using the device camera (html5-qrcode) to scan the Sheikh's dynamic QR; success overlay with green checkmark and "تم تسجيل الحضور بنجاح" message for 5 seconds with cooldown to prevent duplicate scans; late detection (15-minute grace period); attendance history list with status badges
-- **Evaluations**: view weekly evaluation results with partial-fill star ratings per category and supervisor notes
-- **Tasks**: view assigned tasks with due dates and completion status
-- **Financial**: view personal financial dues with paid/unpaid status
-- **Notes**: view supervisor notes and automated absence flags
-- **Notifications**: real-time notification bell with unread count badge, mark-all-read, and delete
+#### Overview
+- Live stats: pending students, approved students, course count, unpaid dues total
+- Performance leaderboard ranked by lowest points deducted + highest attendance
+
+#### Approvals
+- Review pending student registrations with one-click approve/reject
+- Approval sends a welcome notification to the student
+
+#### Students
+- Full user management — view all profiles, change roles (student ↔ admin), change account status
+- Manage course enrollments per student
+- View/edit supervisor & auto-absence notes
+
+#### Attendance
+- Start a session from any course with a live countdown timer
+- Dynamic QR code regenerating every 60 seconds
+- Live attendance roster with manual override (present/late/absent)
+- Pause/resume timer; auto-absence marking when timer ends
+
+#### Evaluations
+- Weekly per-student evaluation across configurable categories
+- Slider-based points deduction with live star rating preview
+- Per-category notes that notify the student
+
+#### Tasks (المهام) — **NEW**
+- Dedicated **Tasks tab** for academy-wide assignment management
+- Create, edit, and delete tasks with title, description, due date, and optional category
+- **Bulk assignment**: assign the same task to multiple students at once
+- **Delivery states**: `assigned` → `in_progress` → `submitted` → `completed`
+- Filter by status or student; stats cards for assigned/in-progress/submitted/completed/overdue
+- View student submissions inline; admin can change task status manually
+- Notifications sent to students when new tasks are assigned
+- Per-category task management also available inside **Categories → Manage**
+
+#### Financial (الذمم المالية) — **ENHANCED**
+- Per-student financial dashboard with summary cards (unpaid, paid, ledger total)
+- Add dues with description, amount, due date, category, and admin notes
+- Mark dues paid/unpaid with automatic **payment ledger** entry on settlement
+- Manual payment recording (amount, method, linked due, notes)
+- Full **payment history** timeline per student
+- Notifications on new dues and payment updates
+
+#### Categories
+- Create, edit, and delete evaluation categories with custom names, descriptions, and max points
+- Per-category student enrollment via `student_categories`
+- Per-student task and due management within each category
+
+#### Settings
+- Change admin account password
+
+### Student Portal — **OVERHAULED**
+
+The student portal now uses a **tabbed interface** with four sections:
+
+#### 1. Home (الرئيسية)
+- Personalized welcome header with quick stats (grade average, pending tasks, outstanding dues)
+- One-tap QR attendance scanner
+- Quick-action cards linking to tasks and finances
+- Urgent tasks preview and latest supervisor notes
+
+#### 2. Tasks (المهام)
+- Full task list with status badges and overdue indicators
+- Filter by delivery state
+- Progress bar showing completion percentage
+- **Interactive workflow**:
+  - `assigned` → **بدء العمل** (start work)
+  - `in_progress` → **تسليم** (submit text) or **إكمال** (mark done)
+  - `submitted` → awaiting Sheikh review
+  - `completed` → done
+- View submission text and submission date
+- Real-time sync when admin assigns or updates tasks
+
+#### 3. Finances (المالية)
+- Summary cards: amount owed, amount paid, total billed
+- Payment instructions (manual settlement with Sheikh)
+- Detailed dues list with paid/unpaid badges and due dates
+- **Payment ledger** showing all recorded payments with method and date
+
+#### 4. Progress (التقدم)
+- Enrolled courses with per-course point bars
+- Weekly star ratings by evaluation category
+- Quran memorization progress tracker
+- Upcoming matches/events
+- Attendance history
+- Historical evaluation archive
+
+#### QR Attendance (available from Home)
+- Camera-based QR scanner with success overlay and cooldown
+- Late detection (15-minute grace period)
 
 ### QR Attendance System
-- Time-based QR token generation using SHA-256 hashing (session ID + 60-second time window + per-session secret)
-- QR payload verified on scan with 120-second tolerance for scan latency
-- QR code displayed on admin screen and regenerated every 60 seconds with a "live" indicator badge
-- Anti-cheat: tokens are time-windowed and hash-verified, preventing screenshot reuse
-- Success state after scan: camera stays open, green checkmark overlay displayed for 5 seconds with progress bar countdown, scanning paused to prevent duplicate records, then auto-resumes
-- Error states shown inline (invalid token, expired, already attended, inactive session) without closing the scanner
+- Time-based QR token generation using SHA-256 hashing
+- QR payload verified on scan with 120-second tolerance
+- Anti-cheat: time-windowed tokens prevent screenshot reuse
+- Success state with 5-second overlay and auto-resume
 
 ### Evaluation & Scoring System
-- 5-star rating with exact partial fills using SVG linear gradients (no rounding)
+- 5-star rating with exact partial fills using SVG linear gradients
 - Points-per-star computed dynamically from each category's max points
 - Evaluations scoped per week (ISO week number + year)
-- Star fills computed client-side from `points_deducted` values
 - Leaderboard ranking: lowest total deductions wins; present-count as tiebreaker
 
 ### Notifications
-- Real-time delivery via Supabase Postgres Changes (realtime subscriptions)
+- Real-time delivery via Supabase Postgres Changes
 - 5 notification types: general, note, schedule, financial, attendance
-- Unread count badge on bell icon
-- Mark all as read / delete individual notifications
-- Arabic relative time formatting ("قبل 5 دقائق", "قبل ساعتين", etc.)
-- Notifications auto-generated on: approval, evaluation notes, attendance updates, financial dues, auto-absence marking
+- Unread count badge; mark all as read / delete individual notifications
+- Arabic relative time formatting
+- Auto-generated on: approval, evaluation notes, attendance, financial dues/payments, task assignments, auto-absence
 
 ### Automated Absence System
-- When an admin session timer ends (or is ended early), all approved students without an attendance record are marked absent
-- Each absent student receives: an `absent` attendance record (7 points deducted), an automated absence note in `student_notes`, and a notification
-- Prevents manual follow-up for tracking no-shows
+- When session timer ends, absent students get attendance record, absence note, and notification
 
 ---
 
 ## Database Schema
 
-### Tables (12 total)
+### Tables (14 total)
+
 | Table | Purpose |
 |---|---|
-| `profiles` | User profiles linked to `auth.users` — role (admin/student), status (pending/approved/rejected), Quran progress, current module |
-| `courses` | Academy courses with structured scheduling (days array, start/end times, duration, session count, notes) |
+| `profiles` | User profiles — role, status, Quran progress, current module |
+| `courses` | Academy courses with structured scheduling |
 | `student_courses` | Join table linking students to courses |
+| `student_categories` | **NEW** — links students to evaluation categories |
 | `categories` | Evaluation categories with configurable max points |
-| `evaluations` | Per-student, per-category, per-week evaluation records with points deducted and notes |
-| `sessions` | Class/match/event sessions with start/end times, active flag, location, and course link |
-| `attendance` | Student attendance per session (present/late/absent) with points deducted |
-| `financial_dues` | Student financial obligations (unpaid/paid) with amount and description |
-| `tasks` | Student tasks with due dates and completion status |
-| `notifications` | User notifications with type classification and read status |
-| `qr_tokens` | Attendance QR token records linked to sessions with validity windows |
-| `student_notes` | Supervisor notes and automated absence flags on student profiles |
+| `evaluations` | Per-student, per-category, per-week evaluation records |
+| `sessions` | Class/match/event sessions with active flag |
+| `attendance` | Student attendance per session |
+| `financial_dues` | Student obligations — amount, status, due date, notes |
+| `financial_payments` | **NEW** — payment ledger with method, amount, linked due |
+| `tasks` | Student tasks with delivery states, submissions, due dates |
+| `notifications` | User notifications with type classification |
+| `qr_tokens` | Attendance QR token records |
+| `student_notes` | Supervisor notes and automated absence flags |
+| `settings` | App-wide config (base_points, absence_deduction) |
+
+### Task Delivery States
+
+| Status | Arabic | Who sets it |
+|---|---|---|
+| `assigned` | مُسندة | Admin (on create) |
+| `in_progress` | قيد التنفيذ | Student (starts work) |
+| `submitted` | مُسلّمة | Student (submits text) |
+| `completed` | مكتملة | Student or Admin |
+
+### Key TypeScript Interfaces
+
+```typescript
+type TaskStatus = 'assigned' | 'in_progress' | 'submitted' | 'completed';
+
+interface Task {
+  id, student_id, category_id, title, description, due_date,
+  status, completed, submission_text, submitted_at, updated_at, created_at
+}
+
+interface FinancialDue {
+  id, student_id, category_id, description, amount, status,
+  due_date, notes, created_at
+}
+
+interface FinancialPayment {
+  id, student_id, due_id, amount, payment_method, notes,
+  recorded_by, created_at
+}
+```
 
 ### Security (Row Level Security)
 - RLS enabled on all tables
-- `is_admin()` SECURITY DEFINER helper function checks `profiles` for `role='admin'` AND `status='approved'`
-- Admins: full CRUD on all tables via `is_admin()` policy checks
-- Students: read-only access to own rows; read access to shared reference data (courses, categories, sessions, QR tokens)
-- Students can insert own attendance (QR scan) and notifications
-- Signup trigger (`handle_new_user`): auto-creates profile row; first-ever signup becomes admin, all subsequent signups default to student/pending
-- 4 separate policies per table (SELECT, INSERT, UPDATE, DELETE) — no `FOR ALL` shortcuts
+- `is_admin()` SECURITY DEFINER helper for admin CRUD
+- Students: read own rows; update own task progress/submissions
+- Students: read own financial dues and payment ledger
+- Admins: full CRUD on all tables
+- Signup trigger auto-creates profile; first signup becomes admin
 
 ---
 
 ## UI/UX Design
 
 ### Design Language
-- **Theme**: Islamic academy aesthetic — deep forest green primary, warm gold accents, cream/neutral backgrounds
-- **Color system**: 6+ color ramps (forest green, gold, cream, charcoal, plus standard red/green/blue for status)
-- **Typography**: Arabic-first RTL layout throughout; clear hierarchy with bold headings and readable body text
-- **Spacing**: Consistent 8px-based spacing system
-- **Line height**: 150% body, 120% headings
+- Islamic academy aesthetic — forest green primary, gold accents, cream backgrounds
+- Arabic-first RTL layout throughout
+- Consistent 8px-based spacing; responsive mobile-first breakpoints
 
-### Animations & Micro-interactions
-- `fade-in` — modal and overlay entrance
-- `slide-up` — modal card and dropdown entrance
-- `pulse-gold` — pulsing glow ring on pending state
-- `scale-in` — card and badge entrance
-- `overlay-in` — QR scanner success overlay with blur backdrop
-- `check-pop` — spring-bounce entrance for success checkmark
-- `shrinkBar` — 5-second countdown progress bar in QR scanner
-- Hover states on all interactive cards (shadow lift, color transitions)
-- Active tab indicator with bold text and background swap
-- Mobile sidebar slide-in with overlay backdrop
+### New Components
 
-### Responsive Design
-- Mobile-first with breakpoints at `sm` (640px), `md` (768px), `lg` (1024px)
-- Sidebar collapses to hamburger menu on mobile with slide-in drawer + overlay
-- Tab bar horizontally scrollable on mobile
-- Grid layouts adapt: 1 column (mobile) → 2 columns (tablet) → 3-4 columns (desktop)
-- QR scanner viewport fills container width on all devices
+| Component | Purpose |
+|---|---|
+| `TasksTab` | Admin task/assignment management with bulk assign and status tracking |
+| `FinancialTabPanel` | Admin financial module with dues, payments, and ledger |
+| Student portal tabs | Home, Tasks, Finances, Progress — internal tab navigation |
 
 ### Reusable Components
 | Component | Purpose |
 |---|---|
-| `AuthLayout` | Split-screen layout for login/register — branded left panel + form right panel |
-| `DashboardLayout` | Sidebar navigation + sticky header with notification bell and avatar |
-| `Modal` | Centered modal with backdrop blur, 4 size variants (sm/md/lg/xl), close button |
-| `NotificationBell` | Dropdown notification panel with realtime updates, unread badge, mark-all-read |
-| `StarRating` | 5-star display with exact partial fills via SVG gradients; inline variant available |
-| `Loading` | Spinner with Arabic label |
-| `EmptyState` | Icon + title + subtitle for empty lists |
-| `Badge` | Colored status pill (forest/gold/red/green/gray) |
+| `AuthLayout` | Split-screen login/register layout |
+| `DashboardLayout` | Sidebar navigation + notification bell |
+| `Modal` | Centered modal with backdrop blur |
+| `NotificationBell` | Realtime notification dropdown |
+| `StarRating` | 5-star display with partial fills |
+| `Loading` / `EmptyState` / `Badge` | Standard UI primitives |
 
 ### Pages
 | Page | Route | Access |
@@ -142,7 +226,7 @@
 | Landing page | `/` | Public |
 | Login | `/login` | Public |
 | Register | `/register` | Public |
-| Pending | `/pending` | Authenticated (pending/rejected users) |
+| Pending | `/pending` | Authenticated (pending/rejected) |
 | Admin Dashboard | `/admin` | Admin only |
 | Student Portal | `/portal` | Students only |
 
@@ -151,38 +235,45 @@
 ## Technical Stack
 
 ### Frontend
-- **React 18** with TypeScript
-- **Vite 5** as build tool and dev server
-- **React Router 7** for client-side routing
-- **Tailwind CSS 3.4** for styling (custom color palette, animations, RTL support)
-- **Lucide React** for icons
-- **html5-qrcode** for camera-based QR scanning
-- **qrcode** (Node) for QR code generation on the admin side
+- React 18 + TypeScript + Vite 5
+- React Router 7, Tailwind CSS 3.4, Lucide React
+- html5-qrcode (scanning), qrcode (generation)
 
-### Backend & Database
-- **Supabase** — PostgreSQL database, Auth, Realtime subscriptions
-- **Row Level Security** on all tables with admin-aware policies
-- **Database triggers** — auto-profile creation on signup with first-admin bootstrap
-- **SECURITY DEFINER functions** — `is_admin()` helper and `handle_new_user()` trigger
-- **Supabase Realtime** — live notification delivery via Postgres Changes
+### Backend
+- Supabase — PostgreSQL, Auth, Realtime
+- Row Level Security with admin-aware policies
+- Database triggers for profile creation
 
-### Utilities
-- `src/lib/auth.tsx` — Auth context provider with session/profile state, `onAuthStateChange` listener, deadlock-safe loading
-- `src/lib/supabase.ts` — Supabase client initialization with session persistence
-- `src/lib/types.ts` — Full TypeScript type definitions for all 12 database tables
-- `src/lib/scoring.ts` — Star fill computation, week/year helpers, evaluation indexing
-- `src/lib/qr.ts` — QR payload generation and verification using Web Crypto API (SHA-256)
-- `src/lib/notifications.ts` — Notification creation helper
-- `src/lib/date.ts` — Arabic date/time formatting utilities (relative time, full date, time, datetime)
+### Utility Modules
+| Module | Purpose |
+|---|---|
+| `src/lib/auth.tsx` | Auth context with session/profile cache |
+| `src/lib/supabase.ts` | Supabase client with localStorage persistence |
+| `src/lib/types.ts` | TypeScript definitions for all tables |
+| `src/lib/tasks.ts` | **NEW** — task status labels, overdue check, progress |
+| `src/lib/finances.ts` | **NEW** — finance summary, payment method labels |
+| `src/lib/scoring.ts` | Star fills, week/year helpers, course points |
+| `src/lib/qr.ts` | QR generation and verification (SHA-256) |
+| `src/lib/notifications.ts` | Notification creation helper |
+| `src/lib/date.ts` | Arabic date/time formatting |
+
+### Migrations
+- `20260811080000_tasks_finances_portal_enhancements.sql` — student_categories, task status/submission columns, financial_payments ledger, student task update RLS
 
 ### Build & Deploy
-- **Vite** production build
-- **TypeScript** strict mode with project references
-- **ESLint** with React Hooks and React Refresh plugins
-- **Netlify** deployment configuration (`netlify.toml`, `_redirects`, `_headers`)
+- `npm run build` — Vite production build
+- `npm run typecheck` — TypeScript strict check
+- Netlify deployment (`netlify.toml`, `_redirects`, `_headers`)
 
-### Language & Localization
-- Fully Arabic (RTL) interface — `dir="rtl"` throughout
-- Arabic day names for course scheduling (السبت through الجمعة)
-- Arabic date formatting via `toLocaleDateString('ar-EG', ...)`
-- English used only for technical identifiers and code
+---
+
+## Data Flow: Admin → Student Sync
+
+```
+Admin creates task ──→ tasks table ──→ Realtime subscription ──→ Student portal updates
+Admin marks due paid ──→ financial_dues + financial_payments ──→ Student finances tab
+Student submits task ──→ tasks.status = 'submitted' ──→ Admin Tasks tab shows submission
+Student starts task ──→ tasks.status = 'in_progress' ──→ Admin sees status change
+```
+
+All changes propagate in real time via Supabase Postgres Changes subscriptions on both admin and student views.

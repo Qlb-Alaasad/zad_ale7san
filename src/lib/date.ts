@@ -13,7 +13,8 @@ export function formatDistanceToArabic(dateStr: string): string {
   return date.toLocaleDateString('ar-EG', { day: 'numeric', month: 'short' });
 }
 
-export function formatDateArabic(dateStr: string): string {
+export function formatDateArabic(dateStr: string | null | undefined): string {
+  if (!dateStr) return 'غير محدد';
   return new Date(dateStr).toLocaleDateString('ar-EG', {
     weekday: 'long',
     day: 'numeric',
@@ -22,7 +23,8 @@ export function formatDateArabic(dateStr: string): string {
   });
 }
 
-export function formatTimeArabic(dateStr: string): string {
+export function formatTimeArabic(dateStr: string | null | undefined): string {
+  if (!dateStr) return '';
   return new Date(dateStr).toLocaleTimeString('ar-EG', {
     hour: '2-digit',
     minute: '2-digit',

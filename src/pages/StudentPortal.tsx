@@ -1,5 +1,9 @@
 import { useEffect, useState, useRef, useCallback } from 'react';
-import { Star, BookOpen, DollarSign, ClipboardList, Calendar, QrCode, X, Award, TrendingUp, Clock, MapPin, CircleCheck as CheckCircle, CircleAlert as AlertCircle, Camera, StickyNote } from 'lucide-react';
+import {
+  Star, BookOpen, DollarSign, ClipboardList, Calendar, QrCode, X, Award, TrendingUp,
+  Clock, MapPin, CircleCheck as CheckCircle, CircleAlert as AlertCircle, StickyNote,
+  LayoutDashboard, Send, Play, History, Info,
+} from 'lucide-react';
 import { Html5Qrcode } from 'html5-qrcode';
 import { supabase } from '@/lib/supabase';
 import { useAuth } from '@/lib/auth';
@@ -10,19 +14,27 @@ import { StarRating } from '@/components/StarRating';
 import { computeStarFills, getCategoryStars, getCurrentWeekYear, computeCoursePoints } from '@/lib/scoring';
 import { verifyQrPayload, sessionSecret } from '@/lib/qr';
 import { formatDateArabic, formatTimeArabic } from '@/lib/date';
-import type { Category, Evaluation, Session, FinancialDue, Task, Attendance, StudentNote, Course, AppSettings } from '@/lib/types';
+import { TASK_STATUS_LABELS, TASK_STATUS_COLORS, isTaskOverdue, normalizeTaskStatus, taskProgressPercent } from '@/lib/tasks';
+import { financeSummary, PAYMENT_METHOD_LABELS } from '@/lib/finances';
+import type {
+  Category, Evaluation, Session, FinancialDue, FinancialPayment, Task, TaskStatus,
+  Attendance, StudentNote, Course, AppSettings,
+} from '@/lib/types';
+
+type PortalTab = 'home' | 'tasks' | 'finances' | 'progress';
 
 export default function StudentPortal() {
-  const { profile, session } = useAuth();
+  const { profile } = useAuth();
+  const [portalTab, setPortalTab] = useState<PortalTab>('home');
   const [categories, setCategories] = useState<Category[]>([]);
   const [evaluations, setEvaluations] = useState<Evaluation[]>([]);
   const [allEvaluations, setAllEvaluations] = useState<Evaluation[]>([]);
   const [sessions, setSessions] = useState<Session[]>([]);
   const [dues, setDues] = useState<FinancialDue[]>([]);
+  const [payments, setPayments] = useState<FinancialPayment[]>([]);
   const [tasks, setTasks] = useState<Task[]>([]);
   const [attendance, setAttendance] = useState<Attendance[]>([]);
   const [notes, setNotes] = useState<StudentNote[]>([]);
-  const [courses, setCourses] = useState<Course[]>([]);
   const [enrolledCourses, setEnrolledCourses] = useState<Course[]>([]);
   const [coursePoints, setCoursePoints] = useState<Record<string, number>>({});
   const [basePoints, setBasePoints] = useState(100);
@@ -30,6 +42,9 @@ export default function StudentPortal() {
   const [scannerOpen, setScannerOpen] = useState(false);
   const [scanResult, setScanResult] = useState<{ success: boolean; message: string } | null>(null);
   const [showSuccessOverlay, setShowSuccessOverlay] = useState(false);
+  const [submitTask, setSubmitTask] = useState<Task | null>(null);
+  const [submissionText, setSubmissionText] = useState('');
+  const [taskFilter, setTaskFilter] = useState<TaskStatus | 'all'>('all');
   const scannerRef = useRef<Html5Qrcode | null>(null);
   const isScanningPaused = useRef(false);
   const cooldownTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -37,21 +52,26 @@ export default function StudentPortal() {
 
   const load = useCallback(async () => {
     if (!profile) return;
-    const [cats, evals, allEvals, sess, duesData, tasksData, attData, notesData, courseData, enrollData, catEnrollData, settingsData] = await Promise.all([
+    const [
+      cats, evals, allEvals, sess, duesData, paymentsData, tasksData,
+      attData, notesData, courseData, enrollData, catEnrollData, settingsRes,
+    ] = await Promise.all([
       supabase.from('categories').select('*').order('name'),
-      supabase.from('evaluations').select('*, category:category(*)').eq('student_id', profile.id).eq('week_number', weekNumber).eq('year', year),
-      supabase.from('evaluations').select('*, category:category(*)').eq('student_id', profile.id).order('created_at', { ascending: false }),
+      supabase.from('evaluations').select('*, category:categories(*)').eq('student_id', profile.id).eq('week_number', weekNumber).eq('year', year),
+      supabase.from('evaluations').select('*, category:categories(*)').eq('student_id', profile.id).order('created_at', { ascending: false }),
       supabase.from('sessions').select('*').gte('end_time', new Date().toISOString()).order('start_time'),
-      supabase.from('financial_dues').select('*').eq('student_id', profile.id).order('created_at', { ascending: false }),
-      supabase.from('tasks').select('*').eq('student_id', profile.id).order('created_at', { ascending: false }),
-      supabase.from('attendance').select('*, session:session(*)').eq('student_id', profile.id).order('created_at', { ascending: false }),
+      supabase.from('financial_dues').select('*, category:categories(id, name)').eq('student_id', profile.id).order('created_at', { ascending: false }),
+      supabase.from('financial_payments').select('*').eq('student_id', profile.id).order('created_at', { ascending: false }),
+      supabase.from('tasks').select('*, category:categories(id, name)').eq('student_id', profile.id).order('created_at', { ascending: false }),
+      supabase.from('attendance').select('*, session:sessions(*)').eq('student_id', profile.id).order('created_at', { ascending: false }),
       supabase.from('student_notes').select('*').eq('student_id', profile.id).order('created_at', { ascending: false }),
       supabase.from('courses').select('*').order('title'),
       supabase.from('student_courses').select('course_id').eq('student_id', profile.id),
       supabase.from('student_categories').select('category_id').eq('student_id', profile.id),
       supabase.from('settings').select('*').eq('id', 1).maybeSingle(),
     ]);
-    const enrolledCatIds = new Set((catEnrollData.data || []).map((e: any) => e.category_id));
+
+    const enrolledCatIds = new Set((catEnrollData.data || []).map((e: { category_id: string }) => e.category_id));
     const allCategories = (cats.data as Category[]) || [];
     setCategories(allCategories.filter((c) => enrolledCatIds.has(c.id)));
     setEvaluations((evals.data as Evaluation[] || []).filter((e) => !e.category_id || enrolledCatIds.has(e.category_id)));
@@ -59,22 +79,21 @@ export default function StudentPortal() {
     setAllEvaluations(filteredAllEvals);
     setSessions((sess.data as Session[] || []).filter((s) => !s.category_id || enrolledCatIds.has(s.category_id)));
     setDues((duesData.data as FinancialDue[] || []).filter((d) => !d.category_id || enrolledCatIds.has(d.category_id)));
+    setPayments(paymentsData.data as FinancialPayment[] || []);
     setTasks((tasksData.data as Task[] || []).filter((t) => !t.category_id || enrolledCatIds.has(t.category_id)));
     setAttendance(attData.data as Attendance[] || []);
     setNotes(notesData.data as StudentNote[] || []);
     const allCourses = courseData.data as Course[] || [];
-    setCourses(allCourses);
-    const enrolledIds = (enrollData.data || []).map((e: any) => e.course_id);
-    const enrolled = allCourses.filter((c) => enrolledIds.includes(c.id));
-    setEnrolledCourses(enrolled);
-    if (settingsData) setBasePoints((settingsData as AppSettings).base_points);
-    // Compute per-course points
-    const evalsAll = filteredAllEvals;
-    const notesAll = (notesData.data as StudentNote[]) || [];
+    const enrolledIds = (enrollData.data || []).map((e: { course_id: string }) => e.course_id);
+    setEnrolledCourses(allCourses.filter((c) => enrolledIds.includes(c.id)));
+
+    const settings = settingsRes.data as AppSettings | null;
+    const bp = settings?.base_points ?? 100;
+    setBasePoints(bp);
+
     const pointsMap: Record<string, number> = {};
-    const bp = settingsData ? (settingsData as AppSettings).base_points : 100;
-    for (const c of enrolled) {
-      pointsMap[c.id] = computeCoursePoints(c.id, bp, evalsAll, notesAll);
+    for (const c of allCourses.filter((co) => enrolledIds.includes(co.id))) {
+      pointsMap[c.id] = computeCoursePoints(c.id, bp, filteredAllEvals, (notesData.data as StudentNote[]) || []);
     }
     setCoursePoints(pointsMap);
     setLoading(false);
@@ -82,19 +101,39 @@ export default function StudentPortal() {
 
   useEffect(() => { load(); }, [load]);
 
-  // Realtime subscription
   useEffect(() => {
     if (!profile) return;
     const channel = supabase
       .channel('student-updates')
       .on('postgres_changes', { event: '*', schema: 'public', table: 'evaluations', filter: `student_id=eq.${profile.id}` }, () => load())
       .on('postgres_changes', { event: '*', schema: 'public', table: 'financial_dues', filter: `student_id=eq.${profile.id}` }, () => load())
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'financial_payments', filter: `student_id=eq.${profile.id}` }, () => load())
       .on('postgres_changes', { event: '*', schema: 'public', table: 'tasks', filter: `student_id=eq.${profile.id}` }, () => load())
       .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'sessions' }, () => load())
       .on('postgres_changes', { event: '*', schema: 'public', table: 'attendance', filter: `student_id=eq.${profile.id}` }, () => load())
       .subscribe();
     return () => { supabase.removeChannel(channel); };
   }, [profile, load]);
+
+  const updateTaskStatus = async (task: Task, status: TaskStatus, extra: Record<string, unknown> = {}) => {
+    await supabase.from('tasks').update({
+      status,
+      completed: status === 'completed',
+      updated_at: new Date().toISOString(),
+      ...extra,
+    }).eq('id', task.id);
+    load();
+  };
+
+  const handleSubmitTask = async () => {
+    if (!submitTask || !submissionText.trim()) return;
+    await updateTaskStatus(submitTask, 'submitted', {
+      submission_text: submissionText.trim(),
+      submitted_at: new Date().toISOString(),
+    });
+    setSubmitTask(null);
+    setSubmissionText('');
+  };
 
   const startScanner = async () => {
     setScannerOpen(true);
@@ -108,87 +147,67 @@ export default function StudentPortal() {
         await html5Qr.start(
           { facingMode: 'environment' },
           { fps: 10, qrbox: { width: 250, height: 250 } },
-          async (decodedText) => {
-            await handleScan(decodedText);
-          },
+          async (decodedText) => { await handleScan(decodedText); },
           () => {}
         );
-      } catch (err) {
+      } catch {
         setScanResult({ success: false, message: 'تعذر الوصول إلى الكاميرا. تأكد من السماح بالوصول.' });
       }
     }, 300);
   };
 
   const stopScanner = async () => {
-    if (cooldownTimerRef.current) {
-      clearTimeout(cooldownTimerRef.current);
-      cooldownTimerRef.current = null;
-    }
+    if (cooldownTimerRef.current) clearTimeout(cooldownTimerRef.current);
     isScanningPaused.current = false;
     setShowSuccessOverlay(false);
     if (scannerRef.current) {
-      try {
-        await scannerRef.current.stop();
-        await scannerRef.current.clear();
-      } catch {}
+      try { await scannerRef.current.stop(); await scannerRef.current.clear(); } catch { /* noop */ }
       scannerRef.current = null;
     }
     setScannerOpen(false);
   };
 
   const handleScan = async (payload: string) => {
-    if (!profile) return;
-    if (isScanningPaused.current) return;
+    if (!profile || isScanningPaused.current) return;
     isScanningPaused.current = true;
     try {
       const parsed = JSON.parse(payload);
-      const sid = parsed.s as string;
-      const verifyResult = await verifyQrPayload(payload, sessionSecret(sid));
+      const verifyResult = await verifyQrPayload(payload, sessionSecret(parsed.s as string));
       if (!verifyResult.valid || !verifyResult.sessionId) {
         setScanResult({ success: false, message: 'رمز غير صالح أو منتهي الصلاحية' });
         isScanningPaused.current = false;
         return;
       }
       const sessionId = verifyResult.sessionId;
-      // Check if already attended
       const { data: existing } = await supabase.from('attendance').select('*').eq('student_id', profile.id).eq('session_id', sessionId).maybeSingle();
       if (existing) {
         setScanResult({ success: false, message: 'تم تسجيل حضورك مسبقاً لهذه الحصة' });
         isScanningPaused.current = false;
         return;
       }
-      // Check if late (after start time + 15 min)
-      const { data: session } = await supabase.from('sessions').select('*').eq('id', sessionId).maybeSingle();
-      if (!session) {
+      const { data: sessionRow } = await supabase.from('sessions').select('*').eq('id', sessionId).maybeSingle();
+      if (!sessionRow) {
         setScanResult({ success: false, message: 'الحصة غير موجودة' });
         isScanningPaused.current = false;
         return;
       }
-      const now = new Date();
-      const start = session.start_time ? new Date(session.start_time) : now;
-      if (!session.is_active) {
+      if (!sessionRow.is_active) {
         setScanResult({ success: false, message: 'الحصة غير نشطة حالياً. اطلب من الشيخ تفعيلها.' });
         isScanningPaused.current = false;
         return;
       }
+      const now = new Date();
+      const start = sessionRow.start_time ? new Date(sessionRow.start_time) : now;
       const lateThreshold = new Date(start.getTime() + 15 * 60000);
       const status = now > lateThreshold ? 'late' : 'present';
-      const pointsDeducted = status === 'late' ? 0 : 0;
-      await supabase.from('attendance').insert({
-        student_id: profile.id,
-        session_id: sessionId,
-        status,
-        points_deducted: pointsDeducted,
-      });
-      const successMessage = status === 'late' ? 'تم تسجيل حضورك (متأخر)' : 'تم تسجيل الحضور بنجاح';
-      setScanResult({ success: true, message: successMessage });
+      await supabase.from('attendance').insert({ student_id: profile.id, session_id: sessionId, status, points_deducted: 0 });
+      setScanResult({ success: true, message: status === 'late' ? 'تم تسجيل حضورك (متأخر)' : 'تم تسجيل الحضور بنجاح' });
       setShowSuccessOverlay(true);
       load();
       cooldownTimerRef.current = setTimeout(() => {
         setShowSuccessOverlay(false);
         setScanResult(null);
         isScanningPaused.current = false;
-        cooldownTimerRef.current = null;
       }, 5000);
     } catch {
       setScanResult({ success: false, message: 'رمز غير صالح' });
@@ -196,326 +215,446 @@ export default function StudentPortal() {
     }
   };
 
-  if (loading) return <DashboardLayout navItems={[{ path: '/portal', label: 'البوابة', icon: <BookOpen className="w-5 h-5" /> }]}><Loading /></DashboardLayout>;
+  const navItems = [
+    { path: '/portal', label: 'البوابة', icon: <BookOpen className="w-5 h-5" /> },
+  ];
+
+  const portalTabs: { key: PortalTab; label: string; icon: React.ReactNode }[] = [
+    { key: 'home', label: 'الرئيسية', icon: <LayoutDashboard className="w-4 h-4" /> },
+    { key: 'tasks', label: 'المهام', icon: <ClipboardList className="w-4 h-4" /> },
+    { key: 'finances', label: 'المالية', icon: <DollarSign className="w-4 h-4" /> },
+    { key: 'progress', label: 'التقدم', icon: <TrendingUp className="w-4 h-4" /> },
+  ];
+
+  if (loading) return <DashboardLayout navItems={navItems}><Loading /></DashboardLayout>;
 
   const categoryStars = getCategoryStars(categories, evaluations);
   const overallPoints = enrolledCourses.length > 0
     ? Math.round(enrolledCourses.reduce((sum, c) => sum + (coursePoints[c.id] ?? basePoints), 0) / enrolledCourses.length)
     : basePoints;
   const overallPct = Math.round((overallPoints / basePoints) * 100);
-  const totalUnpaid = dues.filter((d) => d.status === 'unpaid').reduce((s, d) => s + Number(d.amount), 0);
+  const finance = financeSummary(dues, payments);
+  const pendingTasks = tasks.filter((t) => normalizeTaskStatus(t) !== 'completed');
+  const overdueTasks = tasks.filter((t) => isTaskOverdue(t));
+  const filteredTasks = taskFilter === 'all' ? tasks : tasks.filter((t) => normalizeTaskStatus(t) === taskFilter);
   const upcomingSessions = sessions.filter((s) => s.session_type === 'match' || s.session_type === 'event').slice(0, 5);
-  const recentAttendance = attendance.slice(0, 5);
-  const supervisorNotes = notes.filter((n) => n.note_type === 'supervisor' || n.note_type === 'absence' || n.note_type === 'excuse' || n.note_type === 'custom').slice(0, 10);
-
-  const noteTypeLabels: Record<string, { label: string; color: string }> = {
-    supervisor: { label: 'ملاحظة مشرف', color: 'bg-blue-100 text-blue-700' },
-    absence: { label: 'غياب تلقائي', color: 'bg-red-100 text-red-700' },
-    general: { label: 'عامة', color: 'bg-cream-100 text-charcoal-600' },
-    excuse: { label: 'غياب بعذر', color: 'bg-gold-100 text-gold-700' },
-    custom: { label: 'مخصصة', color: 'bg-forest-100 text-forest-700' },
-  };
+  const supervisorNotes = notes.filter((n) => ['supervisor', 'absence', 'excuse', 'custom'].includes(n.note_type)).slice(0, 5);
 
   return (
-    <DashboardLayout navItems={[{ path: '/portal', label: 'البوابة', icon: <BookOpen className="w-5 h-5" /> }]}>
-      {/* Welcome header */}
-      <div className="mb-6 bg-forest-900 rounded-2xl p-6 text-cream-50 relative overflow-hidden">
+    <DashboardLayout navItems={navItems}>
+      {/* Header */}
+      <div className="mb-4 bg-forest-900 rounded-2xl p-6 text-cream-50 relative overflow-hidden">
         <div className="absolute top-0 left-0 w-48 h-48 rounded-full bg-gold-400/10 blur-3xl" />
         <div className="relative z-10 flex items-center justify-between flex-wrap gap-4">
           <div>
             <h1 className="text-2xl font-bold mb-1">مرحباً، {profile?.full_name}</h1>
-            <p className="text-cream-300 text-sm">إليك ملخص أدائك لهذا الأسبوع</p>
+            <p className="text-cream-300 text-sm">بوابة الطالب — أكاديمية زاد الإحسان</p>
           </div>
-          {enrolledCourses.length > 0 && (
-            <div className="flex items-center gap-3 bg-forest-800/60 rounded-xl px-4 py-3 border border-gold-400/20">
-              <Award className="w-8 h-8 text-gold-400" />
-              <div>
-                <p className="text-xs text-cream-300">المعدل العام</p>
-                <p className="text-2xl font-bold text-gold-400">{overallPct}%</p>
-                <p className="text-xs text-cream-300">{overallPoints}/{basePoints} نقطة</p>
+          <div className="flex gap-3">
+            <div className="bg-forest-800/60 rounded-xl px-4 py-2 text-center border border-gold-400/20">
+              <p className="text-xs text-cream-300">المعدل</p>
+              <p className="text-xl font-bold text-gold-400">{overallPct}%</p>
+            </div>
+            <div className="bg-forest-800/60 rounded-xl px-4 py-2 text-center border border-gold-400/20">
+              <p className="text-xs text-cream-300">مهام معلّقة</p>
+              <p className="text-xl font-bold text-gold-400">{pendingTasks.length}</p>
+            </div>
+            <div className="bg-forest-800/60 rounded-xl px-4 py-2 text-center border border-gold-400/20">
+              <p className="text-xs text-cream-300">مستحقات</p>
+              <p className="text-xl font-bold text-gold-400">${finance.totalOwed.toFixed(0)}</p>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Portal tab bar */}
+      <div className="flex gap-2 mb-6 overflow-x-auto pb-1">
+        {portalTabs.map((t) => (
+          <button
+            key={t.key}
+            onClick={() => setPortalTab(t.key)}
+            className={`flex items-center gap-2 px-4 py-2.5 rounded-xl whitespace-nowrap transition-all ${portalTab === t.key ? 'bg-forest-800 text-cream-50 font-bold' : 'bg-white text-charcoal-600 hover:bg-cream-100 border border-cream-200'}`}
+          >
+            {t.icon}
+            {t.label}
+          </button>
+        ))}
+      </div>
+
+      {/* HOME TAB */}
+      {portalTab === 'home' && (
+        <div className="space-y-6">
+          <button onClick={startScanner} className="btn btn-gold w-full text-base py-3.5">
+            <QrCode className="w-5 h-5" />
+            مسح رمز الحضور
+          </button>
+
+          <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-3">
+            <button onClick={() => setPortalTab('tasks')} className="card text-right hover:shadow-md transition-shadow">
+              <ClipboardList className="w-6 h-6 text-forest-700 mb-2" />
+              <p className="font-bold text-forest-900">{pendingTasks.length} مهمة معلّقة</p>
+              <p className="text-xs text-charcoal-400">{overdueTasks.length} متأخرة • {taskProgressPercent(tasks)}% مكتمل</p>
+            </button>
+            <button onClick={() => setPortalTab('finances')} className="card text-right hover:shadow-md transition-shadow">
+              <DollarSign className="w-6 h-6 text-forest-700 mb-2" />
+              <p className="font-bold text-forest-900">${finance.totalOwed.toFixed(2)} مستحق</p>
+              <p className="text-xs text-charcoal-400">${finance.totalPaidViaDues.toFixed(2)} مُسدَّد</p>
+            </button>
+            <div className="card">
+              <BookOpen className="w-6 h-6 text-forest-700 mb-2" />
+              <p className="font-bold text-forest-900">{enrolledCourses.length} دورة</p>
+              <p className="text-xs text-charcoal-400">حفظ: {profile?.quran_progress}%</p>
+            </div>
+            <div className="card">
+              <Award className="w-6 h-6 text-gold-500 mb-2" />
+              <p className="font-bold text-forest-900">{overallPoints}/{basePoints} نقطة</p>
+              <p className="text-xs text-charcoal-400">المعدل الأسبوعي</p>
+            </div>
+          </div>
+
+          {pendingTasks.length > 0 && (
+            <div className="card">
+              <div className="flex items-center justify-between mb-3">
+                <h3 className="font-bold text-forest-900">مهام عاجلة</h3>
+                <button onClick={() => setPortalTab('tasks')} className="text-sm text-forest-700 hover:underline">عرض الكل</button>
+              </div>
+              <div className="space-y-2">
+                {pendingTasks.slice(0, 3).map((t) => (
+                  <div key={t.id} className="flex items-center justify-between p-2 rounded-lg bg-cream-50">
+                    <div>
+                      <p className="text-sm font-medium text-forest-900">{t.title}</p>
+                      {t.due_date && <p className="text-xs text-charcoal-400">موعد: {formatDateArabic(t.due_date)}</p>}
+                    </div>
+                    <Badge color={TASK_STATUS_COLORS[normalizeTaskStatus(t)]}>{TASK_STATUS_LABELS[normalizeTaskStatus(t)]}</Badge>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {supervisorNotes.length > 0 && (
+            <div className="card">
+              <h3 className="font-bold text-forest-900 mb-3">آخر الملاحظات</h3>
+              <div className="space-y-2">
+                {supervisorNotes.map((n) => (
+                  <div key={n.id} className="p-3 rounded-xl bg-cream-50 text-sm text-charcoal-700">{n.note}</div>
+                ))}
               </div>
             </div>
           )}
         </div>
-      </div>
+      )}
 
-      {/* QR Scanner button */}
-      <button onClick={startScanner} className="btn btn-gold w-full mb-6 text-base py-3.5 animate-pulse-gold">
-        <QrCode className="w-5 h-5" />
-        مسح رمز الحضور
-      </button>
-
-      {/* My Courses with Points */}
-      {enrolledCourses.length > 0 && (
-        <div className="mb-6">
-          <div className="flex items-center gap-2 mb-3">
-            <BookOpen className="w-5 h-5 text-forest-700" />
-            <h2 className="text-lg font-bold text-forest-900">دوراتي ونقاطي</h2>
+      {/* TASKS TAB */}
+      {portalTab === 'tasks' && (
+        <div className="space-y-4">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <h2 className="text-lg font-bold text-forest-900">مهامي وواجباتي</h2>
+              <p className="text-sm text-charcoal-500">تتبّع المواعيد، سلّم عملك، وأكمل مهامك</p>
+            </div>
+            <div className="h-2 w-32 bg-cream-200 rounded-full overflow-hidden">
+              <div className="h-full bg-forest-600 rounded-full transition-all" style={{ width: `${taskProgressPercent(tasks)}%` }} />
+            </div>
           </div>
-          <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-3">
-            {enrolledCourses.map((c) => {
-              const pts = coursePoints[c.id];
-              const hasPts = pts !== undefined;
-              const ptsColor = !hasPts ? '' : pts >= 90 ? 'bg-green-100 text-green-700' : pts >= 70 ? 'bg-gold-100 text-gold-700' : 'bg-red-100 text-red-700';
-              return (
-                <div key={c.id} className="card">
-                  <div className="flex items-center justify-between mb-2">
-                    <p className="font-bold text-forest-900 text-sm">{c.title}</p>
-                    {hasPts && (
-                      <span className={`text-xs font-bold px-2 py-0.5 rounded-full ${ptsColor}`}>
-                        {pts}/{basePoints} نقطة
-                      </span>
-                    )}
-                  </div>
-                  <p className="text-xs text-charcoal-400">{c.schedule_days?.join(' • ') || c.schedule}</p>
-                  {hasPts && (
-                    <div className="mt-2 h-2 bg-cream-200 rounded-full overflow-hidden">
-                      <div
-                        className={`h-full rounded-full transition-all duration-500 ${pts >= 90 ? 'bg-green-500' : pts >= 70 ? 'bg-gold-500' : 'bg-red-500'}`}
-                        style={{ width: `${Math.min(100, (pts / basePoints) * 100)}%` }}
-                      />
+
+          <select value={taskFilter} onChange={(e) => setTaskFilter(e.target.value as TaskStatus | 'all')} className="input w-auto text-sm">
+            <option value="all">كل المهام ({tasks.length})</option>
+            {(Object.keys(TASK_STATUS_LABELS) as TaskStatus[]).map((s) => (
+              <option key={s} value={s}>{TASK_STATUS_LABELS[s]}</option>
+            ))}
+          </select>
+
+          {filteredTasks.length === 0 ? (
+            <EmptyState icon={<ClipboardList className="w-8 h-8" />} title="لا توجد مهام" subtitle="ستظهر هنا المهام التي يُسندها الشيخ" />
+          ) : (
+            <div className="space-y-3">
+              {filteredTasks.map((task) => {
+                const status = normalizeTaskStatus(task);
+                const overdue = isTaskOverdue(task);
+                return (
+                  <div key={task.id} className={`card ${overdue ? 'border-red-200' : ''}`}>
+                    <div className="flex flex-wrap items-start justify-between gap-3">
+                      <div className="flex-1">
+                        <div className="flex flex-wrap items-center gap-2 mb-1">
+                          <h3 className="font-bold text-forest-900">{task.title}</h3>
+                          <Badge color={TASK_STATUS_COLORS[status]}>{TASK_STATUS_LABELS[status]}</Badge>
+                          {overdue && <Badge color="red">متأخرة</Badge>}
+                        </div>
+                        {task.description && <p className="text-sm text-charcoal-600 mb-2">{task.description}</p>}
+                        <div className="flex flex-wrap gap-3 text-xs text-charcoal-400">
+                          {task.due_date && <span>موعد التسليم: {formatDateArabic(task.due_date)}</span>}
+                          {task.category?.name && <span>• {task.category.name}</span>}
+                        </div>
+                        {task.submission_text && (
+                          <div className="mt-3 p-3 rounded-xl bg-forest-50 text-sm">
+                            <p className="text-xs text-forest-600 font-bold mb-1">تسليمك:</p>
+                            <p className="text-charcoal-700">{task.submission_text}</p>
+                            {task.submitted_at && <p className="text-xs text-charcoal-400 mt-1">{formatDateArabic(task.submitted_at)}</p>}
+                          </div>
+                        )}
+                      </div>
+                      <div className="flex flex-wrap gap-2">
+                        {status === 'assigned' && (
+                          <button onClick={() => updateTaskStatus(task, 'in_progress')} className="btn btn-outline text-xs py-2">
+                            <Play className="w-3.5 h-3.5" />
+                            بدء العمل
+                          </button>
+                        )}
+                        {status === 'in_progress' && (
+                          <>
+                            <button onClick={() => { setSubmitTask(task); setSubmissionText(''); }} className="btn btn-primary text-xs py-2">
+                              <Send className="w-3.5 h-3.5" />
+                              تسليم
+                            </button>
+                            <button onClick={() => updateTaskStatus(task, 'completed')} className="btn btn-outline text-xs py-2">
+                              <CheckCircle className="w-3.5 h-3.5" />
+                              إكمال
+                            </button>
+                          </>
+                        )}
+                        {status === 'submitted' && (
+                          <span className="text-xs text-forest-600 bg-forest-50 px-3 py-2 rounded-xl">بانتظار مراجعة الشيخ</span>
+                        )}
+                      </div>
                     </div>
-                  )}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* FINANCES TAB */}
+      {portalTab === 'finances' && (
+        <div className="space-y-4">
+          <div>
+            <h2 className="text-lg font-bold text-forest-900">الذمم المالية</h2>
+            <p className="text-sm text-charcoal-500">ملخص مستحقاتك وسجل المدفوعات</p>
+          </div>
+
+          <div className="grid sm:grid-cols-3 gap-3">
+            <div className="card bg-forest-900 text-cream-50">
+              <p className="text-cream-300 text-sm">المبلغ المستحق</p>
+              <p className="text-3xl font-bold text-gold-400">${finance.totalOwed.toFixed(2)}</p>
+            </div>
+            <div className="card">
+              <p className="text-charcoal-500 text-sm">المُسدَّد</p>
+              <p className="text-2xl font-bold text-green-700">${finance.totalPaidViaDues.toFixed(2)}</p>
+            </div>
+            <div className="card">
+              <p className="text-charcoal-500 text-sm">إجمالي الفواتير</p>
+              <p className="text-2xl font-bold text-forest-900">${finance.totalBilled.toFixed(2)}</p>
+            </div>
+          </div>
+
+          <div className="card bg-gold-50 border border-gold-200">
+            <div className="flex items-start gap-2">
+              <Info className="w-5 h-5 text-gold-700 shrink-0 mt-0.5" />
+              <div className="text-sm text-gold-900">
+                <p className="font-bold mb-1">تعليمات الدفع</p>
+                <p>يتم تسوية الرسوم يدوياً مع الشيخ. لا يوجد دفع إلكتروني حالياً. تواصل مع الإدارة لترتيب التسديد.</p>
+              </div>
+            </div>
+          </div>
+
+          <div className="grid lg:grid-cols-2 gap-4">
+            <div className="card">
+              <h3 className="font-bold text-forest-900 mb-3">المستحقات</h3>
+              {dues.length === 0 ? (
+                <div className="flex items-center gap-2 text-green-600">
+                  <CheckCircle className="w-5 h-5" />
+                  <p>لا توجد رسوم مستحقة</p>
                 </div>
-              );
-            })}
+              ) : (
+                <div className="space-y-2">
+                  {dues.map((d) => (
+                    <div key={d.id} className="p-3 rounded-xl border border-cream-200">
+                      <div className="flex items-center justify-between">
+                        <p className="font-medium text-forest-900">{d.description}</p>
+                        <Badge color={d.status === 'unpaid' ? 'red' : 'green'}>
+                          {d.status === 'unpaid' ? 'غير مدفوع' : 'مدفوع'}
+                        </Badge>
+                      </div>
+                      <p className="text-lg font-bold text-forest-800 mt-1">${Number(d.amount).toFixed(2)}</p>
+                      <p className="text-xs text-charcoal-400">
+                        {d.due_date ? `استحقاق: ${formatDateArabic(d.due_date)} • ` : ''}
+                        {formatDateArabic(d.created_at)}
+                      </p>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            <div className="card">
+              <div className="flex items-center gap-2 mb-3">
+                <History className="w-5 h-5 text-forest-700" />
+                <h3 className="font-bold text-forest-900">سجل المدفوعات</h3>
+              </div>
+              {payments.length === 0 ? (
+                <EmptyState icon={<History className="w-8 h-8" />} title="لا توجد مدفوعات مسجّلة" />
+              ) : (
+                <div className="space-y-2">
+                  {payments.map((p) => (
+                    <div key={p.id} className="p-3 rounded-xl bg-cream-50">
+                      <div className="flex items-center justify-between">
+                        <p className="font-bold text-green-700">${Number(p.amount).toFixed(2)}</p>
+                        <Badge color="green">{PAYMENT_METHOD_LABELS[p.payment_method] || p.payment_method}</Badge>
+                      </div>
+                      {p.notes && <p className="text-sm text-charcoal-600 mt-1">{p.notes}</p>}
+                      <p className="text-xs text-charcoal-400 mt-1">{formatDateArabic(p.created_at)}</p>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
           </div>
         </div>
       )}
 
-      {/* Star ratings */}
-      <div className="mb-6">
-        <div className="flex items-center gap-2 mb-3">
-          <Star className="w-5 h-5 text-gold-500" />
-          <h2 className="text-lg font-bold text-forest-900">تقييمات هذا الأسبوع</h2>
-        </div>
-        <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-3">
-          {categoryStars.map(({ category, fills, pointsDeducted }) => {
-            const activePoints = Math.max(0, category.max_points - pointsDeducted);
-            const pct = Math.round((activePoints / category.max_points) * 100);
-            return (
-              <div key={category.id} className="card">
-                <div className="flex items-center justify-between mb-2">
-                  <p className="font-bold text-forest-900 text-sm">{category.name}</p>
-                  <StarRating fills={fills} size={22} />
-                </div>
-                <p className="text-xs text-charcoal-400 mb-2">{category.description}</p>
-                <div className="flex items-center justify-between">
-                  <span className={`text-xs font-bold px-2 py-0.5 rounded-full ${pct >= 80 ? 'bg-green-100 text-green-700' : pct >= 60 ? 'bg-gold-100 text-gold-700' : 'bg-red-100 text-red-700'}`}>
-                    {activePoints}/{category.max_points} نقطة
-                  </span>
-                  <span className="text-xs text-charcoal-400">{pct}%</span>
-                </div>
-              </div>
-            );
-          })}
-        </div>
-      </div>
-
-      <div className="grid lg:grid-cols-2 gap-6">
-        {/* Quran progress */}
-        <div className="card">
-          <div className="flex items-center gap-2 mb-4">
-            <BookOpen className="w-5 h-5 text-forest-700" />
-            <h3 className="font-bold text-forest-900">تتبع الحفظ</h3>
-          </div>
-          <div className="mb-3">
-            <div className="flex items-center justify-between mb-1">
-              <span className="text-sm text-charcoal-500">التقدم الإجمالي</span>
-              <span className="font-bold text-forest-900">{profile?.quran_progress}%</span>
-            </div>
-            <div className="h-3 bg-cream-200 rounded-full overflow-hidden">
-              <div className="h-full bg-gradient-to-l from-forest-600 to-forest-800 rounded-full transition-all duration-500" style={{ width: `${profile?.quran_progress}%` }} />
-            </div>
-          </div>
-          <p className="text-sm text-charcoal-500">
-            <span className="font-medium">الوحدة الحالية:</span> {profile?.current_module || 'لم تحدد بعد'}
-          </p>
-        </div>
-
-        {/* Financial */}
-        <div className="card">
-          <div className="flex items-center gap-2 mb-4">
-            <DollarSign className="w-5 h-5 text-forest-700" />
-            <h3 className="font-bold text-forest-900">الرسوم المستحقة</h3>
-          </div>
-          {totalUnpaid > 0 ? (
+      {/* PROGRESS TAB */}
+      {portalTab === 'progress' && (
+        <div className="space-y-6">
+          {enrolledCourses.length > 0 && (
             <div>
-              <p className="text-3xl font-bold text-red-600 mb-1">${totalUnpaid}</p>
-              <p className="text-sm text-charcoal-500">إجمالي المبلغ المستحق</p>
-              <div className="mt-3 bg-cream-50 rounded-xl p-3 text-sm text-charcoal-500">
-                <AlertCircle className="w-4 h-4 inline-block ml-1 text-gold-600" />
-                تتم التسوية يدوياً مع الشيخ. لا يوجد دفع إلكتروني.
+              <h2 className="text-lg font-bold text-forest-900 mb-3">دوراتي ونقاطي</h2>
+              <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                {enrolledCourses.map((c) => {
+                  const pts = coursePoints[c.id] ?? basePoints;
+                  const ptsColor = pts >= 90 ? 'bg-green-100 text-green-700' : pts >= 70 ? 'bg-gold-100 text-gold-700' : 'bg-red-100 text-red-700';
+                  return (
+                    <div key={c.id} className="card">
+                      <div className="flex items-center justify-between mb-2">
+                        <p className="font-bold text-forest-900 text-sm">{c.title}</p>
+                        <span className={`text-xs font-bold px-2 py-0.5 rounded-full ${ptsColor}`}>{pts}/{basePoints}</span>
+                      </div>
+                      <div className="h-2 bg-cream-200 rounded-full overflow-hidden">
+                        <div className={`h-full rounded-full ${pts >= 90 ? 'bg-green-500' : pts >= 70 ? 'bg-gold-500' : 'bg-red-500'}`} style={{ width: `${Math.min(100, (pts / basePoints) * 100)}%` }} />
+                      </div>
+                    </div>
+                  );
+                })}
               </div>
             </div>
-          ) : (
-            <div className="flex items-center gap-2 text-green-600">
-              <CheckCircle className="w-5 h-5" />
-              <p className="font-medium">لا توجد رسوم مستحقة</p>
+          )}
+
+          <div>
+            <h2 className="text-lg font-bold text-forest-900 mb-3">تقييمات هذا الأسبوع</h2>
+            <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-3">
+              {categoryStars.map(({ category, fills, pointsDeducted }) => {
+                const activePoints = Math.max(0, category.max_points - pointsDeducted);
+                return (
+                  <div key={category.id} className="card">
+                    <div className="flex items-center justify-between mb-2">
+                      <p className="font-bold text-forest-900 text-sm">{category.name}</p>
+                      <StarRating fills={fills} size={22} />
+                    </div>
+                    <p className="text-xs text-charcoal-400">{activePoints}/{category.max_points} نقطة</p>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+
+          <div className="card">
+            <h3 className="font-bold text-forest-900 mb-3">تتبع الحفظ</h3>
+            <div className="h-3 bg-cream-200 rounded-full overflow-hidden mb-2">
+              <div className="h-full bg-gradient-to-l from-forest-600 to-forest-800 rounded-full" style={{ width: `${profile?.quran_progress}%` }} />
+            </div>
+            <p className="text-sm text-charcoal-500">{profile?.quran_progress}% — {profile?.current_module || 'لم تحدد بعد'}</p>
+          </div>
+
+          {upcomingSessions.length > 0 && (
+            <div className="card">
+              <h3 className="font-bold text-forest-900 mb-3">الفعاليات القادمة</h3>
+              <div className="space-y-2">
+                {upcomingSessions.map((s) => (
+                  <div key={s.id} className="p-3 rounded-xl border border-cream-200">
+                    <p className="font-bold text-sm text-forest-900">{s.title}</p>
+                    <p className="text-xs text-charcoal-500">{s.start_time ? `${formatDateArabic(s.start_time)} • ${formatTimeArabic(s.start_time)}` : 'غير مجدول'}</p>
+                  </div>
+                ))}
+              </div>
             </div>
           )}
-        </div>
 
-        {/* Tasks */}
-        <div className="card">
-          <div className="flex items-center gap-2 mb-4">
-            <ClipboardList className="w-5 h-5 text-forest-700" />
-            <h3 className="font-bold text-forest-900">المهام</h3>
-          </div>
-          {tasks.length === 0 ? (
-            <EmptyState icon={<ClipboardList className="w-8 h-8" />} title="لا توجد مهام" />
-          ) : (
-            <div className="space-y-2">
-              {tasks.slice(0, 5).map((t) => (
-                <div key={t.id} className="flex items-start gap-2 p-2 rounded-lg hover:bg-cream-50">
-                  <div className={`w-5 h-5 rounded-full border-2 flex-shrink-0 mt-0.5 ${t.completed ? 'bg-forest-600 border-forest-600' : 'border-cream-300'}`}>
-                    {t.completed && <CheckCircle className="w-3 h-3 text-cream-50" />}
-                  </div>
-                  <div>
-                    <p className={`text-sm font-medium ${t.completed ? 'text-charcoal-400 line-through' : 'text-forest-900'}`}>{t.title}</p>
-                    {t.due_date && <p className="text-xs text-charcoal-400">موعد التسليم: {formatDateArabic(t.due_date)}</p>}
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-
-        {/* Upcoming matches/events */}
-        <div className="card">
-          <div className="flex items-center gap-2 mb-4">
-            <Calendar className="w-5 h-5 text-forest-700" />
-            <h3 className="font-bold text-forest-900">المباريات والفعاليات القادمة</h3>
-          </div>
-          {upcomingSessions.length === 0 ? (
-            <EmptyState icon={<Calendar className="w-8 h-8" />} title="لا توجد فعاليات قادمة" />
-          ) : (
-            <div className="space-y-2">
-              {upcomingSessions.map((s) => (
-                <div key={s.id} className="p-3 rounded-xl border border-cream-200">
-                  <div className="flex items-center justify-between mb-1">
-                    <p className="font-bold text-forest-900 text-sm">{s.title}</p>
-                    <Badge color={s.session_type === 'match' ? 'gold' : 'green'}>
-                      {s.session_type === 'match' ? 'مباراة' : 'فعالية'}
+          <div className="card">
+            <h3 className="font-bold text-forest-900 mb-3">سجل الحضور</h3>
+            {attendance.length === 0 ? (
+              <EmptyState icon={<Clock className="w-8 h-8" />} title="لا يوجد سجل حضور" />
+            ) : (
+              <div className="space-y-2 max-h-60 overflow-y-auto">
+                {attendance.slice(0, 10).map((a) => (
+                  <div key={a.id} className="flex items-center justify-between p-2 rounded-lg hover:bg-cream-50">
+                    <div>
+                      <p className="text-sm font-medium">{a.session?.title || 'حصة'}</p>
+                      <p className="text-xs text-charcoal-400">{formatDateArabic(a.timestamp)}</p>
+                    </div>
+                    <Badge color={a.status === 'present' ? 'green' : a.status === 'late' ? 'gold' : 'red'}>
+                      {a.status === 'present' ? 'حاضر' : a.status === 'late' ? 'متأخر' : 'غائب'}
                     </Badge>
                   </div>
-                  <p className="text-xs text-charcoal-500">{s.start_time ? `${formatDateArabic(s.start_time)} • ${formatTimeArabic(s.start_time)}` : 'غير مجدول'}</p>
-                  {s.location && <p className="text-xs text-charcoal-400 flex items-center gap-1 mt-1"><MapPin className="w-3 h-3" />{s.location}</p>}
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
+                ))}
+              </div>
+            )}
+          </div>
 
-        {/* Supervisor & absence notes */}
-        {supervisorNotes.length > 0 && (
-          <div className="card lg:col-span-2">
-            <div className="flex items-center gap-2 mb-4">
-              <StickyNote className="w-5 h-5 text-forest-700" />
-              <h3 className="font-bold text-forest-900">الملاحظات والتنبيهات</h3>
-            </div>
-            <div className="space-y-2">
-              {supervisorNotes.map((n) => (
-                <div key={n.id} className={`flex items-start gap-2 p-3 rounded-xl ${n.note_type === 'absence' ? 'bg-red-50' : n.note_type === 'excuse' ? 'bg-gold-50' : 'bg-cream-50'}`}>
-                  {n.note_type === 'absence' ? <AlertCircle className="w-4 h-4 text-red-500 mt-0.5 shrink-0" /> : n.note_type === 'excuse' ? <CheckCircle className="w-4 h-4 text-gold-600 mt-0.5 shrink-0" /> : <StickyNote className="w-4 h-4 text-forest-600 mt-0.5 shrink-0" />}
-                  <div className="flex-1">
-                    <div className="flex items-center gap-2 mb-1 flex-wrap">
-                      <span className={`text-xs font-bold px-2 py-0.5 rounded-full ${noteTypeLabels[n.note_type]?.color || noteTypeLabels.general.color}`}>
-                        {noteTypeLabels[n.note_type]?.label || 'عامة'}
-                      </span>
-                      {n.excused && (
-                        <span className="text-xs font-bold px-2 py-0.5 rounded-full bg-gold-100 text-gold-700">معذور</span>
-                      )}
-                      {n.points_impact !== 0 && !n.excused && (
-                        <span className={`text-xs font-bold px-2 py-0.5 rounded-full ${n.points_impact < 0 ? 'bg-red-100 text-red-700' : 'bg-green-100 text-green-700'}`}>
-                          {n.points_impact > 0 ? `+${n.points_impact}` : n.points_impact} نقطة
-                        </span>
-                      )}
-                      <span className="text-xs text-charcoal-400">{formatDateArabic(n.created_at)}</span>
+          {allEvaluations.length > 0 && (
+            <div className="card">
+              <h3 className="font-bold text-forest-900 mb-3">أرشيف التقييمات</h3>
+              <div className="space-y-2 max-h-60 overflow-y-auto">
+                {allEvaluations.map((e) => (
+                  <div key={e.id} className="flex items-center justify-between p-2 rounded-lg hover:bg-cream-50">
+                    <div className="flex items-center gap-2">
+                      <StarRating fills={computeStarFills(e.points_deducted, e.category?.max_points || 25)} size={16} />
+                      <span className="text-sm">{e.category?.name}</span>
                     </div>
-                    <p className="text-sm text-charcoal-700">{n.note}</p>
+                    <span className="text-xs text-charcoal-400">أسبوع {e.week_number}</span>
                   </div>
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
-
-        {/* Recent attendance */}
-        <div className="card lg:col-span-2">
-          <div className="flex items-center gap-2 mb-4">
-            <Clock className="w-5 h-5 text-forest-700" />
-            <h3 className="font-bold text-forest-900">سجل الحضور الأخير</h3>
-          </div>
-          {recentAttendance.length === 0 ? (
-            <EmptyState icon={<Clock className="w-8 h-8" />} title="لا يوجد سجل حضور" />
-          ) : (
-            <div className="space-y-2">
-              {recentAttendance.map((a) => (
-                <div key={a.id} className="flex items-center justify-between p-2 rounded-lg hover:bg-cream-50">
-                  <div>
-                    <p className="text-sm font-medium text-forest-900">{a.session?.title || 'حصة'}</p>
-                    <p className="text-xs text-charcoal-400">{formatDateArabic(a.timestamp)}</p>
-                  </div>
-                  <Badge color={a.status === 'present' ? 'green' : a.status === 'late' ? 'gold' : 'red'}>
-                    {a.status === 'present' ? 'حاضر' : a.status === 'late' ? 'متأخر' : 'غائب'}
-                  </Badge>
-                </div>
-              ))}
+                ))}
+              </div>
             </div>
           )}
         </div>
+      )}
 
-        {/* Historical evaluations */}
-        <div className="card lg:col-span-2">
-          <div className="flex items-center gap-2 mb-4">
-            <TrendingUp className="w-5 h-5 text-forest-700" />
-            <h3 className="font-bold text-forest-900">الأرشيف التاريخي للتقييمات</h3>
+      {/* Submit task modal */}
+      {submitTask && (
+        <Modal open onClose={() => setSubmitTask(null)} title={`تسليم: ${submitTask.title}`}>
+          <div className="space-y-4">
+            <textarea
+              value={submissionText}
+              onChange={(e) => setSubmissionText(e.target.value)}
+              className="input min-h-[120px]"
+              placeholder="اكتب ملخصاً لعملك أو أي ملاحظات..."
+            />
+            <button onClick={handleSubmitTask} disabled={!submissionText.trim()} className="btn btn-primary w-full">
+              <Send className="w-4 h-4" />
+              إرسال التسليم
+            </button>
           </div>
-          {allEvaluations.length === 0 ? (
-            <EmptyState icon={<TrendingUp className="w-8 h-8" />} title="لا توجد تقييمات سابقة" />
-          ) : (
-            <div className="space-y-2 max-h-80 overflow-y-auto">
-              {allEvaluations.map((e) => (
-                <div key={e.id} className="flex items-center justify-between p-2 rounded-lg hover:bg-cream-50">
-                  <div className="flex items-center gap-3">
-                    <StarRating fills={computeStarFills(e.points_deducted, e.category?.max_points || 25)} size={16} />
-                    <div>
-                      <p className="text-sm font-medium text-forest-900">{e.category?.name}</p>
-                      {e.note && <p className="text-xs text-charcoal-400">{e.note}</p>}
-                    </div>
-                  </div>
-                  <span className="text-xs text-charcoal-400">أسبوع {e.week_number} - {e.year}</span>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-      </div>
+        </Modal>
+      )}
 
-      {/* Scanner Modal */}
+      {/* QR Scanner Modal */}
       <Modal open={scannerOpen} onClose={stopScanner} title="مسح رمز الحضور" size="sm">
         <div className="space-y-4">
-          {!scanResult && (
-            <p className="text-sm text-charcoal-500 text-center">وجّه كاميرا هاتفك نحو رمز QR المعروض على شاشة الشيخ</p>
-          )}
+          {!scanResult && <p className="text-sm text-charcoal-500 text-center">وجّه كاميرا هاتفك نحو رمز QR</p>}
           <div className="relative w-full rounded-xl overflow-hidden bg-forest-950">
             <div id="qr-reader" className="w-full" />
             {showSuccessOverlay && (
-              <div className="absolute inset-0 flex flex-col items-center justify-center bg-forest-950/80 backdrop-blur-sm animate-overlay-in z-10">
-                <div className="w-20 h-20 rounded-full bg-green-500 flex items-center justify-center mb-4 animate-check-pop shadow-lg shadow-green-500/50">
+              <div className="absolute inset-0 flex flex-col items-center justify-center bg-forest-950/80 backdrop-blur-sm z-10">
+                <div className="w-20 h-20 rounded-full bg-green-500 flex items-center justify-center mb-4">
                   <CheckCircle className="w-12 h-12 text-white" />
                 </div>
-                <p className="text-lg font-bold text-white text-center px-4">تم تسجيل الحضور بنجاح</p>
-                <p className="text-sm text-green-300 mt-1">يمكنك مسح رمز آخر بعد قليل</p>
-                <div className="mt-4 w-32 h-1 bg-forest-800 rounded-full overflow-hidden">
-                  <div className="h-full bg-green-500 rounded-full animate-[shrink_5s_linear_forwards]" style={{ animation: 'shrinkBar 5s linear forwards' }} />
-                </div>
+                <p className="text-lg font-bold text-white">تم تسجيل الحضور بنجاح</p>
               </div>
             )}
           </div>
           {scanResult && !showSuccessOverlay && (
-            <div className={`flex items-center gap-3 p-4 rounded-xl animate-fade-in ${scanResult.success ? 'bg-green-50 text-green-700' : 'bg-red-50 text-red-700'}`}>
+            <div className={`flex items-center gap-3 p-4 rounded-xl ${scanResult.success ? 'bg-green-50 text-green-700' : 'bg-red-50 text-red-700'}`}>
               {scanResult.success ? <CheckCircle className="w-5 h-5" /> : <AlertCircle className="w-5 h-5" />}
               <p className="text-sm font-medium">{scanResult.message}</p>
             </div>
