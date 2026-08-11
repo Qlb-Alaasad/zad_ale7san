@@ -11,9 +11,9 @@ interface AuthContextValue {
   refreshProfile: () => Promise<void>;
 }
 
-const PROFILE_CACHE_KEY = 'user_profile';
+export const PROFILE_CACHE_KEY = 'user_profile';
 
-function loadCachedProfile(): Profile | null {
+export function loadCachedProfile(): Profile | null {
   try {
     const raw = localStorage.getItem(PROFILE_CACHE_KEY);
     if (raw) return JSON.parse(raw) as Profile;
@@ -21,6 +21,10 @@ function loadCachedProfile(): Profile | null {
     // ignore malformed cache
   }
   return null;
+}
+
+export function cacheProfile(profile: Profile) {
+  localStorage.setItem(PROFILE_CACHE_KEY, JSON.stringify(profile));
 }
 
 const AuthContext = createContext<AuthContextValue>({
@@ -45,7 +49,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     if (!mountedRef.current) return;
     setProfile(p);
     if (p) {
-      localStorage.setItem(PROFILE_CACHE_KEY, JSON.stringify(p));
+      cacheProfile(p);
       profileLoadedRef.current = p.id;
     } else {
       localStorage.removeItem(PROFILE_CACHE_KEY);

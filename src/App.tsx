@@ -15,7 +15,7 @@ function ProtectedRoute({ children, requireAdmin }: { children: ReactNode; requi
 
   // While the initial session check is running, trust a cached profile
   // from localStorage so logged-in users don't flash to /login on refresh.
-  if (loading && !session) return <Loading />;
+  if (loading && !profile) return <Loading />;
 
   if (!session && !profile) return <Navigate to="/login" state={{ from: location }} replace />;
 

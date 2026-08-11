@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { Mail, Lock, CircleAlert as AlertCircle } from 'lucide-react';
+import { cacheProfile } from '@/lib/auth';
 import { supabase } from '@/lib/supabase';
 import { AuthLayout } from '@/components/AuthLayout';
 
@@ -31,6 +32,7 @@ export default function LoginPage() {
     if (uid) {
       const { data: profile } = await supabase.from('profiles').select('*').eq('id', uid).maybeSingle();
       if (profile) {
+        cacheProfile(profile);
         if (profile.status === 'pending') {
           navigate('/pending');
           return;
