@@ -6,7 +6,7 @@ import { DashboardLayout } from '@/components/DashboardLayout';
 import { Modal } from '@/components/Modal';
 import { Loading, EmptyState, Badge } from '@/components/ui';
 import { StarRating } from '@/components/StarRating';
-import { computeStarFills, getCurrentWeekYear, getCategoryStars } from '@/lib/scoring';
+import { computeStarFills, getCurrentWeekYear, getCategoryStars, computeCoursePoints } from '@/lib/scoring';
 import { generateQrPayload, sessionSecret } from '@/lib/qr';
 import { createNotification } from '@/lib/notifications';
 import { formatDateArabic, formatTimeArabic } from '@/lib/date';
@@ -483,13 +483,18 @@ function StudentsTab() {
   const [loading, setLoading] = useState(true);
   const [selected, setSelected] = useState<Profile | null>(null);
   const [enrollments, setEnrollments] = useState<Record<string, string[]>>({});
+  const [studentScores, setStudentScores] = useState<Record<string, { points: number; pct: number }>>({});
 
   const load = useCallback(async () => {
     setLoading(true);
-    const [{ data: userData }, { data: courseData }, { data: enrollData }] = await Promise.all([
+    const [{ data: userData }, { data: courseData }, { data: enrollData }, { data: evalData }, { data: noteData }, { data: catData }, { data: settingsData }] = await Promise.all([
       supabase.from('profiles').select('*').order('created_at', { ascending: false }),
       supabase.from('courses').select('*').order('title'),
       supabase.from('student_courses').select('student_id, course_id'),
+      supabase.from('evaluations').select('*'),
+      supabase.from('student_notes').select('*'),
+      supabase.from('categories').select('*'),
+      supabase.from('app_settings').select('*').limit(1).maybeSingle(),
     ]);
     setUsers(userData as Profile[] || []);
     setCourses(courseData as Course[] || []);
@@ -499,6 +504,18 @@ function StudentsTab() {
       map[e.student_id].push(e.course_id);
     });
     setEnrollments(map);
+
+    const basePoints = (settingsData as AppSettings | null)?.base_points ?? 100;
+    const evals = (evalData || []) as Evaluation[];
+    const notes = (noteData || []) as StudentNote[];
+    const scores: Record<string, { points: number; pct: number }> = {};
+    for (const u of (userData as Profile[] || [])) {
+      const cids = map[u.id] || [];
+      if (cids.length === 0) continue;
+      const avg = cids.reduce((sum, cid) => sum + computeCoursePoints(cid, basePoints, evals.filter(e => e.student_id === u.id), notes.filter(n => n.student_id === u.id)), 0) / cids.length;
+      scores[u.id] = { points: Math.round(avg), pct: Math.round((avg / basePoints) * 100) };
+    }
+    setStudentScores(scores);
     setLoading(false);
   }, []);
 
@@ -554,6 +571,12 @@ function StudentsTab() {
                   <p className="font-bold text-forest-900">{u.full_name}</p>
                   <Badge color={u.role === 'admin' ? 'gold' : 'forest'}>{roleLabel(u.role)}</Badge>
                   <Badge color={statusColor(u.status)}>{statusLabel(u.status)}</Badge>
+                  {u.role === 'student' && studentScores[u.id] && (
+                    <span className={`inline-flex items-center gap-1 text-xs font-bold px-2 py-0.5 rounded-full ${studentScores[u.id].pct >= 80 ? 'bg-green-100 text-green-700' : studentScores[u.id].pct >= 60 ? 'bg-gold-100 text-gold-700' : 'bg-red-100 text-red-700'}`}>
+                      <Award className="w-3 h-3" />
+                      {studentScores[u.id].pct}%
+                    </span>
+                  )}
                 </div>
                 <p className="text-sm text-charcoal-500 mt-0.5">
                   {u.age ? `العمر: ${u.age}` : ''} {u.parent_phone ? `• ${u.parent_phone}` : ''}

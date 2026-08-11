@@ -199,6 +199,10 @@ export default function StudentPortal() {
   if (loading) return <DashboardLayout navItems={[{ path: '/portal', label: 'البوابة', icon: <BookOpen className="w-5 h-5" /> }]}><Loading /></DashboardLayout>;
 
   const categoryStars = getCategoryStars(categories, evaluations);
+  const overallPoints = enrolledCourses.length > 0
+    ? Math.round(enrolledCourses.reduce((sum, c) => sum + (coursePoints[c.id] ?? basePoints), 0) / enrolledCourses.length)
+    : basePoints;
+  const overallPct = Math.round((overallPoints / basePoints) * 100);
   const totalUnpaid = dues.filter((d) => d.status === 'unpaid').reduce((s, d) => s + Number(d.amount), 0);
   const upcomingSessions = sessions.filter((s) => s.session_type === 'match' || s.session_type === 'event').slice(0, 5);
   const recentAttendance = attendance.slice(0, 5);
@@ -217,9 +221,21 @@ export default function StudentPortal() {
       {/* Welcome header */}
       <div className="mb-6 bg-forest-900 rounded-2xl p-6 text-cream-50 relative overflow-hidden">
         <div className="absolute top-0 left-0 w-48 h-48 rounded-full bg-gold-400/10 blur-3xl" />
-        <div className="relative z-10">
-          <h1 className="text-2xl font-bold mb-1">مرحباً، {profile?.full_name}</h1>
-          <p className="text-cream-300 text-sm">إليك ملخص أدائك لهذا الأسبوع</p>
+        <div className="relative z-10 flex items-center justify-between flex-wrap gap-4">
+          <div>
+            <h1 className="text-2xl font-bold mb-1">مرحباً، {profile?.full_name}</h1>
+            <p className="text-cream-300 text-sm">إليك ملخص أدائك لهذا الأسبوع</p>
+          </div>
+          {enrolledCourses.length > 0 && (
+            <div className="flex items-center gap-3 bg-forest-800/60 rounded-xl px-4 py-3 border border-gold-400/20">
+              <Award className="w-8 h-8 text-gold-400" />
+              <div>
+                <p className="text-xs text-cream-300">المعدل العام</p>
+                <p className="text-2xl font-bold text-gold-400">{overallPct}%</p>
+                <p className="text-xs text-cream-300">{overallPoints}/{basePoints} نقطة</p>
+              </div>
+            </div>
+          )}
         </div>
       </div>
 
@@ -274,15 +290,25 @@ export default function StudentPortal() {
           <h2 className="text-lg font-bold text-forest-900">تقييمات هذا الأسبوع</h2>
         </div>
         <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-3">
-          {categoryStars.map(({ category, fills }) => (
-            <div key={category.id} className="card">
-              <div className="flex items-center justify-between mb-2">
-                <p className="font-bold text-forest-900 text-sm">{category.name}</p>
-                <StarRating fills={fills} size={22} />
+          {categoryStars.map(({ category, fills, pointsDeducted }) => {
+            const activePoints = Math.max(0, category.max_points - pointsDeducted);
+            const pct = Math.round((activePoints / category.max_points) * 100);
+            return (
+              <div key={category.id} className="card">
+                <div className="flex items-center justify-between mb-2">
+                  <p className="font-bold text-forest-900 text-sm">{category.name}</p>
+                  <StarRating fills={fills} size={22} />
+                </div>
+                <p className="text-xs text-charcoal-400 mb-2">{category.description}</p>
+                <div className="flex items-center justify-between">
+                  <span className={`text-xs font-bold px-2 py-0.5 rounded-full ${pct >= 80 ? 'bg-green-100 text-green-700' : pct >= 60 ? 'bg-gold-100 text-gold-700' : 'bg-red-100 text-red-700'}`}>
+                    {activePoints}/{category.max_points} نقطة
+                  </span>
+                  <span className="text-xs text-charcoal-400">{pct}%</span>
+                </div>
               </div>
-              <p className="text-xs text-charcoal-400">{category.description}</p>
-            </div>
-          ))}
+            );
+          })}
         </div>
       </div>
 
