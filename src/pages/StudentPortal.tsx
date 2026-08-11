@@ -2,12 +2,12 @@ import { useEffect, useState, useRef, useCallback } from 'react';
 import {
   Star, BookOpen, DollarSign, ClipboardList, Calendar, QrCode, X, Award, TrendingUp,
   Clock, MapPin, CircleCheck as CheckCircle, CircleAlert as AlertCircle, StickyNote,
-  LayoutDashboard, Send, Play, History, Info,
+  LayoutDashboard, Send, Play, History, Info, Bell,
 } from 'lucide-react';
 import { Html5Qrcode } from 'html5-qrcode';
 import { supabase } from '@/lib/supabase';
 import { useAuth } from '@/lib/auth';
-import { DashboardLayout } from '@/components/DashboardLayout';
+import { DashboardLayout, type DashboardNavItem } from '@/components/DashboardLayout';
 import { Modal } from '@/components/Modal';
 import { Loading, EmptyState, Badge } from '@/components/ui';
 import { StarRating } from '@/components/StarRating';
@@ -240,18 +240,22 @@ export default function StudentPortal() {
     }
   };
 
-  const navItems = [
-    { path: '/portal', label: 'البوابة', icon: <BookOpen className="w-5 h-5" /> },
-  ];
-
   const portalTabs: { key: PortalTab; label: string; icon: React.ReactNode }[] = [
     { key: 'home', label: 'الرئيسية', icon: <LayoutDashboard className="w-4 h-4" /> },
     { key: 'tasks', label: 'المهام', icon: <ClipboardList className="w-4 h-4" /> },
     { key: 'finances', label: 'المالية', icon: <DollarSign className="w-4 h-4" /> },
-    { key: 'progress', label: 'التقدم', icon: <TrendingUp className="w-4 h-4" /> },
+    { key: 'progress', label: 'الإنجاز والتقدم', icon: <TrendingUp className="w-4 h-4" /> },
   ];
 
-  if (loading) return <DashboardLayout navItems={navItems}><Loading /></DashboardLayout>;
+  const sidebarNavItems: DashboardNavItem[] = [
+    { id: 'home', label: 'الرئيسية', icon: <LayoutDashboard className="w-5 h-5" />, onClick: () => setPortalTab('home'), active: portalTab === 'home' },
+    { id: 'tasks', label: 'المهام', icon: <ClipboardList className="w-5 h-5" />, onClick: () => setPortalTab('tasks'), active: portalTab === 'tasks' },
+    { id: 'finances', label: 'المالية', icon: <DollarSign className="w-5 h-5" />, onClick: () => setPortalTab('finances'), active: portalTab === 'finances' },
+    { id: 'progress', label: 'الإنجاز والتقدم', icon: <TrendingUp className="w-5 h-5" />, onClick: () => setPortalTab('progress'), active: portalTab === 'progress' },
+    { id: 'notifications', label: 'الإشعارات', icon: <Bell className="w-5 h-5" /> },
+  ];
+
+  if (loading) return <DashboardLayout navItems={sidebarNavItems}><Loading /></DashboardLayout>;
 
   const categoryStars = getCategoryStars(categories, evaluations);
   const enrolledCourseIds = enrolledCourses.map((c) => c.id);
@@ -273,7 +277,7 @@ export default function StudentPortal() {
   const supervisorNotes = notes.filter((n) => ['supervisor', 'absence', 'excuse', 'custom'].includes(n.note_type)).slice(0, 5);
 
   return (
-    <DashboardLayout navItems={navItems}>
+    <DashboardLayout navItems={sidebarNavItems}>
       {/* Header */}
       <div className="mb-4 bg-forest-900 rounded-2xl p-6 text-cream-50 relative overflow-hidden">
         <div className="absolute top-0 left-0 w-48 h-48 rounded-full bg-gold-400/10 blur-3xl" />
