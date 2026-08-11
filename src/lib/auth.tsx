@@ -11,6 +11,18 @@ interface AuthContextValue {
   refreshProfile: () => Promise<void>;
 }
 
+const PROFILE_CACHE_KEY = 'user_profile';
+
+function loadCachedProfile(): Profile | null {
+  try {
+    const raw = localStorage.getItem(PROFILE_CACHE_KEY);
+    if (raw) return JSON.parse(raw) as Profile;
+  } catch {
+    // ignore malformed cache
+  }
+  return null;
+}
+
 const AuthContext = createContext<AuthContextValue>({
   session: null,
   profile: null,
@@ -20,11 +32,25 @@ const AuthContext = createContext<AuthContextValue>({
 });
 
 export function AuthProvider({ children }: { children: ReactNode }) {
+  // Hydrate from localStorage immediately so the app can render without
+  // waiting for the async Supabase session check on refresh.
   const [session, setSession] = useState<Session | null>(null);
-  const [profile, setProfile] = useState<Profile | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [profile, setProfile] = useState<Profile | null>(loadCachedProfile);
+  const [loading, setLoading] = useState(() => loadCachedProfile() === null);
   const mountedRef = useRef(true);
   const profileLoadedRef = useRef<string | null>(null);
+
+  const setProfileAndCache = (p: Profile | null) => {
+    if (!mountedRef.current) return;
+    setProfile(p);
+    if (p) {
+      localStorage.setItem(PROFILE_CACHE_KEY, JSON.stringify(p));
+      profileLoadedRef.current = p.id;
+    } else {
+      localStorage.removeItem(PROFILE_CACHE_KEY);
+      profileLoadedRef.current = null;
+    }
+  };
 
   const loadProfile = async (uid: string) => {
     if (!mountedRef.current) return;
@@ -33,10 +59,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       console.error('Failed to load profile:', error.message);
       return;
     }
-    if (mountedRef.current) {
-      setProfile(data as Profile | null);
-      profileLoadedRef.current = uid;
-    }
+    setProfileAndCache(data as Profile | null);
   };
 
   useEffect(() => {
@@ -63,7 +86,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       if (data.session?.user) {
         loadProfile(data.session.user.id).finally(finishInitial);
       } else {
-        setProfile(null);
+        setProfileAndCache(null);
         finishInitial();
       }
     });
@@ -79,16 +102,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           loadProfile(newSession.user.id);
         }
       } else {
-        setProfile(null);
-        profileLoadedRef.current = null;
+        setProfileAndCache(null);
       }
 
-      // After the initial session is restored, keep loading=true until
-      // getSession() also finishes (it loads the profile). This prevents
-      // a flash where the app renders with no profile and redirects to /login.
       if (event === 'INITIAL_SESSION') {
         // getSession().then() will call finishInitial — don't finish here
-        // if getSession hasn't resolved yet.
       } else {
         finishInitial();
       }
@@ -106,9 +124,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const signOut = async () => {
     await supabase.auth.signOut();
-    setProfile(null);
+    setProfileAndCache(null);
     setSession(null);
-    profileLoadedRef.current = null;
   };
 
   return (

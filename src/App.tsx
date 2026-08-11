@@ -13,14 +13,20 @@ function ProtectedRoute({ children, requireAdmin }: { children: ReactNode; requi
   const { session, profile, loading } = useAuth();
   const location = useLocation();
 
-  if (loading) return <Loading />;
-  if (!session) return <Navigate to="/login" state={{ from: location }} replace />;
+  // While the initial session check is running, trust a cached profile
+  // from localStorage so logged-in users don't flash to /login on refresh.
+  if (loading && !session) return <Loading />;
 
-  if (profile?.status === 'pending') return <Navigate to="/pending" replace />;
-  if (profile?.status === 'rejected') return <Navigate to="/pending" replace />;
+  if (!session && !profile) return <Navigate to="/login" state={{ from: location }} replace />;
 
-  if (requireAdmin && profile?.role !== 'admin') return <Navigate to="/portal" replace />;
-  if (!requireAdmin && profile?.role === 'admin') return <Navigate to="/admin" replace />;
+  // Use cached profile for routing decisions while session restores
+  const effectiveProfile = profile;
+
+  if (effectiveProfile?.status === 'pending') return <Navigate to="/pending" replace />;
+  if (effectiveProfile?.status === 'rejected') return <Navigate to="/pending" replace />;
+
+  if (requireAdmin && effectiveProfile?.role !== 'admin') return <Navigate to="/portal" replace />;
+  if (!requireAdmin && effectiveProfile?.role === 'admin') return <Navigate to="/admin" replace />;
 
   return <>{children}</>;
 }
