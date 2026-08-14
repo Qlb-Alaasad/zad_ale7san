@@ -1,9 +1,12 @@
 import { BrowserRouter, Routes, Route, Navigate, useLocation } from 'react-router-dom';
 import { type ReactNode } from 'react';
 import { AuthProvider, useAuth } from '@/lib/auth';
+import { ErrorBoundary } from '@/components/ErrorBoundary';
+import { GuestRoute, PendingRoute } from '@/components/AuthRoutes';
 import LoginPage from '@/pages/LoginPage';
 import RegisterPage from '@/pages/RegisterPage';
 import PendingPage from '@/pages/PendingPage';
+import AuthCallbackPage from '@/pages/AuthCallbackPage';
 import AdminDashboard from '@/pages/AdminDashboard';
 import StudentPortal from '@/pages/StudentPortal';
 import LandingPage from '@/pages/LandingPage';
@@ -33,18 +36,21 @@ function ProtectedRoute({ children, requireAdmin }: { children: ReactNode; requi
 
 export default function App() {
   return (
-    <AuthProvider>
-      <BrowserRouter>
-        <Routes>
-          <Route path="/" element={<LandingPage />} />
-          <Route path="/login" element={<LoginPage />} />
-          <Route path="/register" element={<RegisterPage />} />
-          <Route path="/pending" element={<PendingPage />} />
-          <Route path="/admin" element={<ProtectedRoute requireAdmin><AdminDashboard /></ProtectedRoute>} />
-          <Route path="/portal" element={<ProtectedRoute><StudentPortal /></ProtectedRoute>} />
-          <Route path="*" element={<Navigate to="/" replace />} />
-        </Routes>
-      </BrowserRouter>
-    </AuthProvider>
+    <ErrorBoundary>
+      <AuthProvider>
+        <BrowserRouter>
+          <Routes>
+            <Route path="/" element={<LandingPage />} />
+            <Route path="/auth/callback" element={<AuthCallbackPage />} />
+            <Route path="/login" element={<GuestRoute><LoginPage /></GuestRoute>} />
+            <Route path="/register" element={<GuestRoute><RegisterPage /></GuestRoute>} />
+            <Route path="/pending" element={<PendingRoute><PendingPage /></PendingRoute>} />
+            <Route path="/admin" element={<ProtectedRoute requireAdmin><AdminDashboard /></ProtectedRoute>} />
+            <Route path="/portal" element={<ProtectedRoute><StudentPortal /></ProtectedRoute>} />
+            <Route path="*" element={<Navigate to="/" replace />} />
+          </Routes>
+        </BrowserRouter>
+      </AuthProvider>
+    </ErrorBoundary>
   );
 }

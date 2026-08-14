@@ -8,14 +8,18 @@
 
 ### Authentication & User Management
 - Email/password registration and login via Supabase Auth
-- Google OAuth login option (provider-dependent)
-- Automatic profile creation on signup (database trigger)
+- **Google OAuth** via centralized `signInWithGoogle()` helper with dynamic redirect URLs
+- OAuth callback route (`/auth/callback`) syncs profile to DB + `localStorage` cache before routing
+- Redirect URL resolution: `VITE_SITE_URL` (Netlify production) or runtime `window.location.origin` (local dev)
+- Automatic profile creation on signup (database trigger) with client-side fallback for OAuth race conditions
 - First-user auto-promotion to admin (bootstrap logic — no hardcoded admin account)
 - Account approval workflow: new students start as `pending`, admin approves/rejects
-- Pending and rejected account pages with clear status messaging
+- Pending page auto-refreshes profile every 15s and redirects when approved
+- Guest routes prevent authenticated users from looping on `/login` after OAuth
 - Password change in admin settings
 - Protected route guards: redirects by role (admin → dashboard, student → portal) and status (pending/rejected → pending page)
 - Session persistence with `localStorage` profile cache and auto-refresh tokens
+- Global `ErrorBoundary` for graceful UI recovery on unexpected render errors
 
 ### Admin Dashboard (Sheikh's Panel)
 
@@ -220,10 +224,22 @@ interface FinancialPayment {
 ### Security (Row Level Security)
 - RLS enabled on all tables
 - `is_admin()` SECURITY DEFINER helper for admin CRUD
-- Students: read own rows; update own task progress/submissions
-- Students: read own financial dues and payment ledger
+- Students: read own rows; update own task progress/submissions via whitelisted client API (`updateStudentTask`)
+- DB trigger `enforce_student_task_update` blocks students from changing task metadata (title, due date, reassignment)
+- Students: read own financial dues and payment ledger (no write access)
 - Admins: full CRUD on all tables
 - Signup trigger auto-creates profile; first signup becomes admin
+- OAuth profile sync with retry + safe fallback upsert
+
+### OAuth Setup (Supabase Dashboard)
+Add these **Redirect URLs** under Authentication → URL Configuration:
+- `http://localhost:5173/auth/callback` (local Vite dev)
+- `https://<your-netlify-domain>/auth/callback` (production)
+
+Optional env var for production builds:
+```bash
+VITE_SITE_URL=https://<your-netlify-domain>
+```
 
 ---
 
@@ -256,8 +272,9 @@ interface FinancialPayment {
 | Page | Route | Access |
 |---|---|---|
 | Landing page | `/` | Public |
-| Login | `/login` | Public |
-| Register | `/register` | Public |
+| Login | `/login` | Public (guest-only) |
+| Register | `/register` | Public (guest-only) |
+| OAuth callback | `/auth/callback` | Public (post-Google redirect) |
 | Pending | `/pending` | Authenticated (pending/rejected) |
 | Admin Dashboard | `/admin` | Admin only |
 | Student Portal | `/portal` | Students only |
@@ -282,6 +299,8 @@ interface FinancialPayment {
 | `src/lib/academy-week.ts` | **NEW** — Friday-based academy week bounds and numbering |
 | `src/lib/evaluation-history.ts` | **NEW** — weekly archive + Friday auto-reset |
 | `src/lib/groups.ts` | **NEW** — group CRUD, bulk assign, Hifz checks |
+| `src/lib/auth-helpers.ts` | OAuth redirect URLs, Google sign-in, profile ensure/sync |
+| `src/lib/profile-cache.ts` | localStorage profile cache helpers |
 | `src/lib/auth.tsx` | Auth context with session/profile cache |
 | `src/lib/supabase.ts` | Supabase client with localStorage persistence |
 | `src/lib/types.ts` | TypeScript definitions for all tables |
@@ -294,7 +313,8 @@ interface FinancialPayment {
 
 ### Migrations
 - `20260811080000_tasks_finances_portal_enhancements.sql` — task status, payment ledger, student_categories
-- `20260811100000_groups_history_weekly_reset.sql` — **NEW** — student_groups, group_enrollments, student_evaluation_history, categories.is_hifz, settings.last_weekly_reset_at
+- `20260815120000_security_task_update_guard.sql` — student task update column guard trigger
+- `20260811120000_complete_schema_and_storage.sql` — consolidated schema + storage buckets
 
 ### Build & Deploy
 - `npm run build` — Vite production build

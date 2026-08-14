@@ -1,22 +1,9 @@
 import { supabase } from './supabase';
 import type { FinancialDue, FinancialPayment } from './types';
 
-function logFinanceFetchError(operation: string, studentId: string, error: { message: string; code?: string; details?: string; hint?: string }) {
-  console.error(`[finances] ${operation} failed — possible RLS block or schema mismatch`, {
-    studentId,
-    message: error.message,
-    code: error.code,
-    details: error.details,
-    hint: error.hint,
-  });
-}
-
 /** Fetch financial dues for a student (student_id = profiles.id / auth.users.id). */
 export async function getFinancialDuesForStudent(studentId: string): Promise<FinancialDue[]> {
-  if (!studentId) {
-    console.warn('[finances] getFinancialDuesForStudent called with empty studentId');
-    return [];
-  }
+  if (!studentId) return [];
 
   const { data, error } = await supabase
     .from('financial_dues')
@@ -25,30 +12,16 @@ export async function getFinancialDuesForStudent(studentId: string): Promise<Fin
     .order('created_at', { ascending: false });
 
   if (error) {
-    logFinanceFetchError('getFinancialDuesForStudent', studentId, error);
+    console.error('[finances] getFinancialDuesForStudent failed:', error.message);
     return [];
   }
 
-  const dues = (data as FinancialDue[]) || [];
-  if (dues.length === 0) {
-    console.info('[finances] getFinancialDuesForStudent returned 0 rows', { studentId });
-  } else {
-    console.debug('[finances] getFinancialDuesForStudent ok', {
-      studentId,
-      count: dues.length,
-      unpaid: dues.filter((d) => d.status === 'unpaid').length,
-    });
-  }
-
-  return dues;
+  return (data as FinancialDue[]) || [];
 }
 
 /** Fetch payment ledger entries for a student. */
 export async function getFinancialPaymentsForStudent(studentId: string): Promise<FinancialPayment[]> {
-  if (!studentId) {
-    console.warn('[finances] getFinancialPaymentsForStudent called with empty studentId');
-    return [];
-  }
+  if (!studentId) return [];
 
   const { data, error } = await supabase
     .from('financial_payments')
@@ -57,7 +30,7 @@ export async function getFinancialPaymentsForStudent(studentId: string): Promise
     .order('created_at', { ascending: false });
 
   if (error) {
-    logFinanceFetchError('getFinancialPaymentsForStudent', studentId, error);
+    console.error('[finances] getFinancialPaymentsForStudent failed:', error.message);
     return [];
   }
 
@@ -86,11 +59,9 @@ export function financeSummary(dues: FinancialDue[], payments: FinancialPayment[
   const totalPaidViaDues = sumPaidDues(dues);
   const totalRecorded = sumPayments(payments);
   return {
-    /** Outstanding / pending payment (unpaid dues) */
     totalOwed,
     totalPaidViaDues,
     totalRecorded,
-    /** All dues ever billed (unpaid + paid) */
     totalBilled: totalOwed + totalPaidViaDues,
   };
 }

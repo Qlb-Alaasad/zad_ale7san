@@ -15,7 +15,7 @@ import { computeStarFills, getCategoryStars, getCurrentWeekYear, computeStudentS
 import { filterCategoriesForHifz, isStudentInHifzGroup } from '@/lib/groups';
 import { verifyQrPayload, sessionSecret } from '@/lib/qr';
 import { formatDateArabic, formatTimeArabic } from '@/lib/date';
-import { TASK_STATUS_LABELS, TASK_STATUS_COLORS, isTaskOverdue, normalizeTaskStatus, taskProgressPercent, getTasksForStudent } from '@/lib/tasks';
+import { TASK_STATUS_LABELS, TASK_STATUS_COLORS, isTaskOverdue, normalizeTaskStatus, taskProgressPercent, getTasksForStudent, updateStudentTask } from '@/lib/tasks';
 import { financeSummary, PAYMENT_METHOD_LABELS, getFinancialDuesForStudent, getFinancialPaymentsForStudent } from '@/lib/finances';
 import { resolveStudentId } from '@/lib/student-id';
 import type {
@@ -43,6 +43,7 @@ export default function StudentPortal() {
   const [coursePoints, setCoursePoints] = useState<Record<string, number>>({});
   const [basePoints, setBasePoints] = useState(100);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [scannerOpen, setScannerOpen] = useState(false);
   const [scanResult, setScanResult] = useState<{ success: boolean; message: string } | null>(null);
   const [showSuccessOverlay, setShowSuccessOverlay] = useState(false);
@@ -57,10 +58,11 @@ export default function StudentPortal() {
   const load = useCallback(async () => {
     const sid = await resolveStudentId(profile);
     if (!sid) {
-      console.warn('[StudentPortal] load aborted — no student id');
+      setLoadError('تعذر تحميل بيانات حسابك. يرجى إعادة تسجيل الدخول.');
       setLoading(false);
       return;
     }
+    setLoadError(null);
     setStudentId(sid);
     const hifz = await isStudentInHifzGroup(sid);
     setInHifzGroup(hifz);
@@ -140,12 +142,20 @@ export default function StudentPortal() {
   }, [studentId, load]);
 
   const updateTaskStatus = async (task: Task, status: TaskStatus, extra: Record<string, unknown> = {}) => {
-    await supabase.from('tasks').update({
+    const sid = studentId ?? (await resolveStudentId(profile));
+    if (!sid) return;
+
+    const result = await updateStudentTask(task.id, sid, {
       status,
-      completed: status === 'completed',
-      updated_at: new Date().toISOString(),
-      ...extra,
-    }).eq('id', task.id);
+      submission_text: typeof extra.submission_text === 'string' ? extra.submission_text : undefined,
+      submitted_at: typeof extra.submitted_at === 'string' ? extra.submitted_at : undefined,
+    });
+
+    if (!result.ok) {
+      setLoadError('تعذر تحديث المهمة. يرجى المحاولة مرة أخرى.');
+      return;
+    }
+
     load();
   };
 
@@ -256,6 +266,20 @@ export default function StudentPortal() {
   ];
 
   if (loading) return <DashboardLayout navItems={sidebarNavItems}><Loading /></DashboardLayout>;
+
+  if (loadError) {
+    return (
+      <DashboardLayout navItems={sidebarNavItems}>
+        <div className="card text-center py-10">
+          <AlertCircle className="w-10 h-10 text-red-500 mx-auto mb-3" />
+          <p className="text-charcoal-600 mb-4">{loadError}</p>
+          <button type="button" onClick={() => { setLoading(true); load(); }} className="btn btn-primary">
+            إعادة المحاولة
+          </button>
+        </div>
+      </DashboardLayout>
+    );
+  }
 
   const categoryStars = getCategoryStars(categories, evaluations);
   const enrolledCourseIds = enrolledCourses.map((c) => c.id);

@@ -2,8 +2,10 @@ import { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { Mail, Lock, CircleAlert as AlertCircle } from 'lucide-react';
 import { cacheProfile } from '@/lib/auth';
+import { signInWithGoogle, resolvePostAuthPath } from '@/lib/auth-helpers';
 import { supabase } from '@/lib/supabase';
 import { AuthLayout } from '@/components/AuthLayout';
+import type { Profile } from '@/lib/types';
 
 export default function LoginPage() {
   const navigate = useNavigate();
@@ -33,21 +35,7 @@ export default function LoginPage() {
       const { data: profile } = await supabase.from('profiles').select('*').eq('id', uid).maybeSingle();
       if (profile) {
         cacheProfile(profile);
-        if (profile.status === 'pending') {
-          navigate('/pending');
-          return;
-        }
-        if (profile.status === 'rejected') {
-          setError('تم رفض حسابك. يرجى التواصل مع الشيخ.');
-          await supabase.auth.signOut();
-          setLoading(false);
-          return;
-        }
-        if (profile.role === 'admin') {
-          navigate('/admin');
-        } else {
-          navigate('/portal');
-        }
+        routeAfterLogin(profile as Profile);
         return;
       }
     }
@@ -57,15 +45,21 @@ export default function LoginPage() {
   const handleGoogleLogin = async () => {
     setError(null);
     setLoading(true);
-    const { error: oauthError } = await supabase.auth.signInWithOAuth({ provider: 'google' });
+    const { error: oauthError } = await signInWithGoogle();
     if (oauthError) {
-      if (oauthError.message.includes('provider_not_enabled') || oauthError.message.includes('provider')) {
-        setError('تسجيل الدخول عبر جوجل غير مفعّل حالياً، يرجى استخدام البريد الإلكتروني');
-      } else {
-        setError(oauthError.message);
-      }
+      setError(oauthError);
       setLoading(false);
     }
+  };
+
+  const routeAfterLogin = (profile: Profile) => {
+    if (profile.status === 'rejected') {
+      setError('تم رفض حسابك. يرجى التواصل مع الشيخ.');
+      void supabase.auth.signOut();
+      setLoading(false);
+      return;
+    }
+    navigate(resolvePostAuthPath(profile));
   };
 
   return (
