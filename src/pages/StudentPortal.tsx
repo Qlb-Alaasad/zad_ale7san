@@ -137,6 +137,7 @@ export default function StudentPortal() {
       .on('postgres_changes', { event: '*', schema: 'public', table: 'tasks', filter: `student_id=eq.${studentId}` }, () => load())
       .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'sessions' }, () => load())
       .on('postgres_changes', { event: '*', schema: 'public', table: 'attendance', filter: `student_id=eq.${studentId}` }, () => load())
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'student_notes', filter: `student_id=eq.${studentId}` }, () => load())
       .subscribe();
     return () => { supabase.removeChannel(channel); };
   }, [studentId, load]);

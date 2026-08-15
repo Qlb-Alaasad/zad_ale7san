@@ -18,6 +18,7 @@ import { FinancialTabPanel } from '@/components/admin/FinancialTabPanel';
 import { GroupsTab } from '@/components/admin/GroupsTab';
 import { StudentHistoryViewer } from '@/components/admin/StudentHistoryViewer';
 import { maybeRunWeeklyEvaluationReset } from '@/lib/evaluation-history';
+import { createStudentNote, deleteStudentNote, listStudentNotes, updateStudentNote } from '@/lib/student-notes';
 import QRCode from 'qrcode';
 
 type Tab = 'overview' | 'approvals' | 'students' | 'groups' | 'attendance' | 'evaluations' | 'tasks' | 'financial' | 'categories' | 'settings';
@@ -242,7 +243,15 @@ function ApprovalsTab() {
 
 // ============ USERS (all profiles) ============
 // ============ STUDENT NOTES ============
-function StudentNotesSection({ studentId, courses }: { studentId: string; courses: Course[] }) {
+function StudentNotesSection({
+  studentId,
+  courses,
+  onNotesChanged,
+}: {
+  studentId: string;
+  courses: Course[];
+  onNotesChanged?: () => void;
+}) {
   const [notes, setNotes] = useState<StudentNote[]>([]);
   const [newNote, setNewNote] = useState('');
   const [newCourseId, setNewCourseId] = useState<string>('');
@@ -258,18 +267,21 @@ function StudentNotesSection({ studentId, courses }: { studentId: string; course
   const [editSaving, setEditSaving] = useState(false);
 
   const load = useCallback(async () => {
-    const { data } = await supabase.from('student_notes')
-      .select('*, course:courses(*)').eq('student_id', studentId).order('created_at', { ascending: false });
-    setNotes(data as StudentNote[] || []);
+    setNotes(await listStudentNotes(studentId));
   }, [studentId]);
 
   useEffect(() => { load(); }, [load]);
+
+  const notifyChange = () => {
+    load();
+    onNotesChanged?.();
+  };
 
   const addNote = async () => {
     if (!newNote.trim()) return;
     setSaving(true);
     const impact = newExcused ? 0 : (parseInt(newPointsImpact) || 0);
-    await supabase.from('student_notes').insert({
+    const { error } = await createStudentNote({
       student_id: studentId,
       note: newNote.trim(),
       note_type: newNoteType,
@@ -277,18 +289,27 @@ function StudentNotesSection({ studentId, courses }: { studentId: string; course
       points_impact: impact,
       excused: newExcused,
     });
+    if (error) {
+      alert(`فشل إضافة الملاحظة: ${error}`);
+      setSaving(false);
+      return;
+    }
     setNewNote('');
     setNewCourseId('');
     setNewPointsImpact('0');
     setNewExcused(false);
     setNewNoteType('supervisor');
     setSaving(false);
-    load();
+    notifyChange();
   };
 
   const deleteNote = async (id: string) => {
-    await supabase.from('student_notes').delete().eq('id', id);
-    load();
+    const { error } = await deleteStudentNote(id);
+    if (error) {
+      alert(`فشل حذف الملاحظة: ${error}`);
+      return;
+    }
+    notifyChange();
   };
 
   const startEdit = (n: StudentNote) => {
@@ -311,15 +332,20 @@ function StudentNotesSection({ studentId, courses }: { studentId: string; course
     if (!editNote.trim()) return;
     setEditSaving(true);
     const impact = editExcused ? 0 : (parseInt(editPointsImpact) || 0);
-    await supabase.from('student_notes').update({
+    const { error } = await updateStudentNote(id, {
       note: editNote.trim(),
       course_id: editCourseId || null,
       points_impact: impact,
       excused: editExcused,
-    }).eq('id', id);
+    });
+    if (error) {
+      alert(`فشل تحديث الملاحظة: ${error}`);
+      setEditSaving(false);
+      return;
+    }
     setEditSaving(false);
     cancelEdit();
-    load();
+    notifyChange();
   };
 
   const typeLabels: Record<string, { label: string; color: string }> = {
@@ -734,7 +760,7 @@ function StudentsTab() {
 
             {/* Student notes (supervisor + auto-absence) */}
             {selected.role === 'student' && (
-              <StudentNotesSection studentId={selected.id} courses={courses} />
+              <StudentNotesSection studentId={selected.id} courses={courses} onNotesChanged={load} />
             )}
 
             {selected.role === 'student' && (

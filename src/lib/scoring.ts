@@ -45,13 +45,18 @@ export function computeStudentScore(
   inHifzGroup: boolean
 ): { points: number; pct: number } {
   const filteredEvals = filterEvaluationsForStudent(evaluations, categories, inHifzGroup);
-  if (courseIds.length === 0) return { points: basePoints, pct: 100 };
+  if (courseIds.length === 0) {
+    const globalOnly = computeGlobalScoreAdjustments(filteredEvals, notes);
+    const points = Math.max(0, Math.round(basePoints + globalOnly));
+    return { points, pct: Math.round((points / basePoints) * 100) };
+  }
   const avg =
     courseIds.reduce(
       (sum, cid) => sum + computeCoursePoints(cid, basePoints, filteredEvals, notes),
       0
     ) / courseIds.length;
-  const points = Math.round(avg);
+  const globalAdjustments = computeGlobalScoreAdjustments(filteredEvals, notes);
+  const points = Math.max(0, Math.round(avg + globalAdjustments));
   return { points, pct: Math.round((points / basePoints) * 100) };
 }
 
@@ -83,9 +88,9 @@ export function getCategoryStars(
 
 /**
  * Compute a student's current points for a specific course.
- * Starts from basePoints, subtracts deductions from evaluations (for that course),
- * and applies points_impact from student_notes linked to that course (unless excused).
- * Returns a value clamped to >= 0.
+ * Starts from basePoints, subtracts course-scoped evaluation deductions,
+ * and applies course-scoped student_notes points_impact (unless excused).
+ * Global adjustments (null course_id) are applied in computeStudentScore.
  */
 export function computeCoursePoints(
   courseId: string,
@@ -103,4 +108,20 @@ export function computeCoursePoints(
 
   const points = basePoints - evalDeduction + noteImpact;
   return Math.max(0, Math.round(points));
+}
+
+/** Evaluations and notes without course_id apply once to the overall score. */
+export function computeGlobalScoreAdjustments(
+  evaluations: Evaluation[],
+  notes: StudentNote[]
+): number {
+  const globalEvalDeduction = evaluations
+    .filter((e) => !e.course_id)
+    .reduce((sum, e) => sum + (e.points_deducted || 0), 0);
+
+  const globalNoteImpact = notes
+    .filter((n) => !n.course_id && !n.excused)
+    .reduce((sum, n) => sum + (n.points_impact || 0), 0);
+
+  return -globalEvalDeduction + globalNoteImpact;
 }

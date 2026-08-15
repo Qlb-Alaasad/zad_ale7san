@@ -1,34 +1,48 @@
 import { useCallback, useEffect, useState } from 'react';
 import { StickyNote, Plus, Trash2, Save, Users } from 'lucide-react';
-import { supabase } from '@/lib/supabase';
 import { createNotification } from '@/lib/notifications';
 import { formatDateArabic } from '@/lib/date';
+import { createStudentNote, deleteStudentNote } from '@/lib/student-notes';
 import { Loading, EmptyState, Badge } from '@/components/ui';
 import { Modal } from '@/components/Modal';
+import { getTeacherStudentIds } from '@/lib/classes';
+import { supabase } from '@/lib/supabase';
 import type { Profile, StudentNote, NoteType } from '@/lib/types';
 
 interface TeacherNotesTabProps {
-  students: Profile[];
+  teacherId: string;
 }
 
-export function TeacherNotesTab({ students }: TeacherNotesTabProps) {
+export function TeacherNotesTab({ teacherId }: TeacherNotesTabProps) {
+  const [students, setStudents] = useState<Profile[]>([]);
   const [notes, setNotes] = useState<(StudentNote & { student?: Profile })[]>([]);
   const [loading, setLoading] = useState(true);
   const [selectedStudent, setSelectedStudent] = useState<string>('');
   const [noteText, setNoteText] = useState('');
   const [noteType, setNoteType] = useState<NoteType>('supervisor');
+  const [pointsImpact, setPointsImpact] = useState('0');
   const [showForm, setShowForm] = useState(false);
 
-  const studentIds = students.map((s) => s.id);
   const studentMap = Object.fromEntries(students.map((s) => [s.id, s]));
 
-  const load = useCallback(async () => {
-    if (studentIds.length === 0) {
+  const loadStudents = useCallback(async () => {
+    const ids = await getTeacherStudentIds(teacherId);
+    if (ids.length === 0) {
+      setStudents([]);
+      return;
+    }
+    const { data } = await supabase.from('profiles').select('*').in('id', ids).order('full_name');
+    setStudents((data as Profile[]) || []);
+  }, [teacherId]);
+
+  const loadNotes = useCallback(async () => {
+    if (students.length === 0) {
       setNotes([]);
       setLoading(false);
       return;
     }
     setLoading(true);
+    const studentIds = students.map((s) => s.id);
     const { data, error } = await supabase
       .from('student_notes')
       .select('*')
@@ -48,23 +62,29 @@ export function TeacherNotesTab({ students }: TeacherNotesTabProps) {
       );
     }
     setLoading(false);
-  }, [studentIds.join(',')]);
+  }, [students, studentMap]);
 
-  useEffect(() => { load(); }, [load]);
+  useEffect(() => {
+    void loadStudents();
+  }, [loadStudents]);
+
+  useEffect(() => {
+    void loadNotes();
+  }, [loadNotes]);
 
   const addNote = async () => {
     if (!selectedStudent || !noteText.trim()) return;
-    const { error } = await supabase.from('student_notes').insert({
+    const impact = parseInt(pointsImpact, 10) || 0;
+    const { error } = await createStudentNote({
       student_id: selectedStudent,
       note: noteText.trim(),
       note_type: noteType,
-      points_impact: noteType === 'absence' ? -5 : 0,
+      points_impact: noteType === 'absence' ? -5 : impact,
     });
     if (error) {
-      alert(`فشل إضافة الملاحظة: ${error.message}`);
+      alert(`فشل إضافة الملاحظة: ${error}`);
       return;
     }
-    const student = studentMap[selectedStudent];
     await createNotification(
       selectedStudent,
       noteType === 'absence' ? 'تنبيه غياب' : 'ملاحظة من المعلّم',
@@ -72,16 +92,20 @@ export function TeacherNotesTab({ students }: TeacherNotesTabProps) {
       'note'
     );
     setNoteText('');
+    setPointsImpact('0');
     setSelectedStudent('');
     setShowForm(false);
-    load();
-    void student;
+    loadNotes();
   };
 
   const deleteNote = async (id: string) => {
     if (!confirm('حذف هذه الملاحظة؟')) return;
-    await supabase.from('student_notes').delete().eq('id', id);
-    load();
+    const { error } = await deleteStudentNote(id);
+    if (error) {
+      alert(`فشل حذف الملاحظة: ${error}`);
+      return;
+    }
+    loadNotes();
   };
 
   if (loading) return <Loading />;
@@ -111,6 +135,11 @@ export function TeacherNotesTab({ students }: TeacherNotesTabProps) {
                 <div className="flex flex-wrap items-center gap-2 mb-1">
                   <p className="font-bold text-forest-900">{n.student?.full_name || 'طالب'}</p>
                   <Badge color={n.note_type === 'absence' ? 'red' : 'forest'}>{n.note_type}</Badge>
+                  {n.points_impact !== 0 && !n.excused && (
+                    <span className={`text-xs font-bold px-2 py-0.5 rounded-full ${n.points_impact < 0 ? 'bg-red-100 text-red-700' : 'bg-green-100 text-green-700'}`}>
+                      {n.points_impact > 0 ? `+${n.points_impact}` : n.points_impact} نقطة
+                    </span>
+                  )}
                 </div>
                 <p className="text-sm text-charcoal-600">{n.note}</p>
                 <p className="text-xs text-charcoal-400 mt-1">{formatDateArabic(n.created_at)}</p>
@@ -144,6 +173,17 @@ export function TeacherNotesTab({ students }: TeacherNotesTabProps) {
                 <option value="custom">مخصصة</option>
               </select>
             </div>
+            {noteType !== 'absence' && (
+              <div>
+                <label className="label">تأثير النقاط (سالب = خصم)</label>
+                <input
+                  type="number"
+                  value={pointsImpact}
+                  onChange={(e) => setPointsImpact(e.target.value)}
+                  className="input"
+                />
+              </div>
+            )}
             <div>
               <label className="label">النص</label>
               <textarea value={noteText} onChange={(e) => setNoteText(e.target.value)} className="input min-h-[100px]" placeholder="اكتب الملاحظة..." />
