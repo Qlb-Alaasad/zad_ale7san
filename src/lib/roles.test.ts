@@ -65,3 +65,39 @@ describe('student role journey', () => {
     expect(isStudent(pendingStudent)).toBe(true);
   });
 });
+
+// ========== NEW EDGE CASES ==========
+
+describe('role guards with null/undefined profiles', () => {
+  it('returns false for all guards when profile is null', () => {
+    expect(isAdmin(null)).toBe(false);
+    expect(isTeacher(null)).toBe(false);
+    expect(isStaff(null)).toBe(false);
+    expect(isStudent(null)).toBe(false);
+  });
+
+  it('returns false for all guards when profile is undefined', () => {
+    expect(isAdmin(undefined)).toBe(false);
+    expect(isTeacher(undefined)).toBe(false);
+    expect(isStaff(undefined)).toBe(false);
+    expect(isStudent(undefined)).toBe(false);
+  });
+
+  it('returns false for rejected users regardless of role', () => {
+    const rejectedAdmin = profile({ role: 'admin', status: 'rejected' });
+    const rejectedTeacher = profile({ role: 'teacher', status: 'rejected' });
+    expect(isAdmin(rejectedAdmin)).toBe(false);
+    expect(isTeacher(rejectedTeacher)).toBe(false);
+    expect(isStaff(rejectedAdmin)).toBe(false);
+  });
+});
+
+describe('roleLabel edge cases', () => {
+  it('returns the raw string for unknown roles', () => {
+    expect(roleLabel('unknown' as any)).toBe('unknown');
+  });
+
+  it('returns admin Arabic label', () => {
+    expect(roleLabel('admin')).toBe('مدير تقني');
+  });
+});

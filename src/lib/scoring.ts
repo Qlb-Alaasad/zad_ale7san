@@ -36,6 +36,7 @@ export function filterEvaluationsForStudent(
 /**
  * Compute course points excluding Hifz-only evaluations for non-Hifz students.
  */
+// In computeStudentScore (lines 46-61)
 export function computeStudentScore(
   courseIds: string[],
   basePoints: number,
@@ -44,20 +45,21 @@ export function computeStudentScore(
   categories: Category[],
   inHifzGroup: boolean
 ): { points: number; pct: number } {
+  const safeBase = Math.max(0, basePoints || 100);
   const filteredEvals = filterEvaluationsForStudent(evaluations, categories, inHifzGroup);
   if (courseIds.length === 0) {
     const globalOnly = computeGlobalScoreAdjustments(filteredEvals, notes);
-    const points = Math.max(0, Math.round(basePoints + globalOnly));
-    return { points, pct: Math.round((points / basePoints) * 100) };
+    const points = Math.max(0, Math.round(safeBase + globalOnly));
+    return { points, pct: safeBase > 0 ? Math.round((points / safeBase) * 100) : 0 };
   }
   const avg =
     courseIds.reduce(
-      (sum, cid) => sum + computeCoursePoints(cid, basePoints, filteredEvals, notes),
+      (sum, cid) => sum + computeCoursePoints(cid, safeBase, filteredEvals, notes),
       0
     ) / courseIds.length;
   const globalAdjustments = computeGlobalScoreAdjustments(filteredEvals, notes);
   const points = Math.max(0, Math.round(avg + globalAdjustments));
-  return { points, pct: Math.round((points / basePoints) * 100) };
+  return { points, pct: safeBase > 0 ? Math.round((points / safeBase) * 100) : 0 };
 }
 
 /**

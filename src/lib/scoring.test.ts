@@ -37,6 +37,8 @@ function evaluation(overrides: Partial<Evaluation> & Pick<Evaluation, 'id' | 'st
   };
 }
 
+// ========== EXISTING TESTS PRESERVED ==========
+
 describe('grade recalculation from feedback notes', () => {
   it('restores full score when a global deduction note is removed', () => {
     const withDeduction = [note({ id: 'n1', student_id: 's1', points_impact: -5 })];
@@ -139,5 +141,96 @@ describe('computeStarFills', () => {
     const fills = computeStarFills(25, 25);
     expect(fills[0]).toBe(0);
     expect(fills.every((fill) => fill <= 0)).toBe(true);
+  });
+});
+
+// ========== NEW EDGE-CASE COVERAGE ==========
+
+describe('computeStarFills edge cases', () => {
+  it('handles negative deductions as zero (full marks)', () => {
+    expect(computeStarFills(-5, 25)).toEqual([1, 1, 1, 1, 1]);
+  });
+
+  it('handles deductions exceeding maxPoints as total depletion', () => {
+    const fills = computeStarFills(50, 25);
+    expect(fills.every((f) => f === 0)).toBe(true);
+  });
+
+  it('handles custom maxPoints (e.g. 10-point scale)', () => {
+    const fills = computeStarFills(2, 10);
+    // earned = 8, pointsPerStar = 2
+    expect(fills).toEqual([1, 1, 1, 1, 0]);
+  });
+
+  it('handles fractional fills precisely', () => {
+    const fills = computeStarFills(12, 25); // earned = 13, perStar = 5
+    expect(fills[0]).toBe(1);
+    expect(fills[1]).toBe(1);
+    expect(fills[2]).toBeCloseTo(0.6, 5);
+    expect(fills[3]).toBe(0);
+  });
+});
+
+describe('computeStudentScore edge cases', () => {
+  it('returns 0 points and 0 pct when basePoints is 0 (no division by zero)', () => {
+    const score = computeStudentScore([courseA], 0, [], [], [], true);
+    expect(score.points).toBe(0);
+    expect(score.pct).toBe(0);
+  });
+
+  it('returns basePoints when no courses and no adjustments', () => {
+    const score = computeStudentScore([], basePoints, [], [], [], true);
+    expect(score.points).toBe(basePoints);
+    expect(score.pct).toBe(100);
+  });
+
+  it('caps negative scores at 0', () => {
+    const notes = [note({ id: 'n1', student_id: 's1', points_impact: -500 })];
+    const score = computeStudentScore([], basePoints, [], notes, [], true);
+    expect(score.points).toBe(0);
+    expect(score.pct).toBe(0);
+  });
+
+  it('averages multiple course points correctly', () => {
+    const evals = [
+      evaluation({ id: 'e1', student_id: 's1', category_id: 'c1', course_id: courseA, points_deducted: 10 }),
+      evaluation({ id: 'e2', student_id: 's1', category_id: 'c2', course_id: courseB, points_deducted: 20 }),
+    ];
+    const score = computeStudentScore([courseA, courseB], basePoints, evals, [], [], true);
+    // courseA = 90, courseB = 80, avg = 85
+    expect(score.points).toBe(85);
+    expect(score.pct).toBe(85);
+  });
+});
+
+describe('computeCoursePoints edge cases', () => {
+  it('ignores evaluations scoped to other courses', () => {
+    const evals = [
+      evaluation({ id: 'e1', student_id: 's1', category_id: 'c1', course_id: courseA, points_deducted: 10 }),
+      evaluation({ id: 'e2', student_id: 's1', category_id: 'c2', course_id: courseB, points_deducted: 20 }),
+    ];
+    expect(computeCoursePoints(courseA, basePoints, evals, [])).toBe(90);
+  });
+
+  it('rounds fractional results', () => {
+    const notes = [note({ id: 'n1', student_id: 's1', course_id: courseA, points_impact: 0.6 })];
+    expect(computeCoursePoints(courseA, basePoints, [], notes)).toBe(101);
+  });
+});
+
+describe('computeGlobalScoreAdjustments edge cases', () => {
+  it('ignores course-scoped evaluations and notes', () => {
+    const evals = [
+      evaluation({ id: 'e1', student_id: 's1', category_id: 'c1', course_id: courseA, points_deducted: 10 }),
+    ];
+    const notes = [note({ id: 'n1', student_id: 's1', course_id: courseA, points_impact: -5 })];
+    expect(computeGlobalScoreAdjustments(evals, notes)).toBe(0);
+  });
+
+  it('treats missing points_deducted as 0', () => {
+    const evals = [
+      { ...evaluation({ id: 'e1', student_id: 's1', category_id: 'c1' }), points_deducted: undefined as unknown as number },
+    ];
+    expect(computeGlobalScoreAdjustments(evals, [])).toBe(0);
   });
 });
