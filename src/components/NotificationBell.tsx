@@ -64,7 +64,8 @@ export function NotificationBell({ open: controlledOpen, onOpenChange }: Notific
   };
 
   const deleteNotification = async (id: string) => {
-    await supabase.from('notifications').delete().eq('id', id);
+    if (!session?.user) return;
+    await supabase.from('notifications').delete().eq('id', id).eq('user_id', session.user.id);
     loadNotifications();
   };
 

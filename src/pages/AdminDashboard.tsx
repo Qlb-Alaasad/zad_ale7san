@@ -1,12 +1,12 @@
 import { useEffect, useState, useCallback, useRef } from 'react';
-import { Users, ClipboardCheck, GraduationCap, Star, DollarSign, QrCode, Settings, CircleCheck as CheckCircle, Circle as XCircle, Clock, Plus, Trash2, CreditCard as Edit, Save, X, Calendar, MapPin, Award, BookOpen, Trophy, Play, Pause, TriangleAlert as AlertTriangle, StickyNote } from 'lucide-react';
+import { Users, ClipboardCheck, GraduationCap, Star, DollarSign, QrCode, Settings, CircleCheck as CheckCircle, Circle as XCircle, Clock, Plus, Trash2, CreditCard as Edit, Save, X, Calendar, Award, BookOpen, Trophy, Play, Pause, TriangleAlert as AlertTriangle, StickyNote } from 'lucide-react';
 import { supabase } from '@/lib/supabase';
 import { useAuth } from '@/lib/auth';
 import { DashboardLayout } from '@/components/DashboardLayout';
 import { Modal } from '@/components/Modal';
 import { Loading, EmptyState, Badge } from '@/components/ui';
 import { StarRating } from '@/components/StarRating';
-import { computeStarFills, getCurrentWeekYear, getCategoryStars, computeStudentScore, filterEvaluationsForStudent } from '@/lib/scoring';
+import { computeStarFills, getCurrentWeekYear, computeStudentScore } from '@/lib/scoring';
 import { getAcademyWeekYear } from '@/lib/academy-week';
 import { isStudentInHifzGroup } from '@/lib/groups';
 import { generateQrPayload, sessionSecret } from '@/lib/qr';
@@ -105,11 +105,11 @@ function OverviewTab() {
       // Build leaderboard: lower totalDeducted = higher rank; presentCount as tiebreaker
       const studentList = students as Pick<Profile, 'id' | 'full_name'>[] || [];
       const deductedMap: Record<string, number> = {};
-      (evals || []).forEach((e: any) => {
+      (evals || []).forEach((e: { student_id: string; points_deducted?: number }) => {
         deductedMap[e.student_id] = (deductedMap[e.student_id] || 0) + (e.points_deducted || 0);
       });
       const presentMap: Record<string, number> = {};
-      (att || []).forEach((a: any) => {
+      (att || []).forEach((a: { student_id: string }) => {
         presentMap[a.student_id] = (presentMap[a.student_id] || 0) + 1;
       });
       const ranked = studentList.map((s) => ({
@@ -517,7 +517,7 @@ function StudentsTab() {
     setUsers(userData as Profile[] || []);
     setCourses(courseData as Course[] || []);
     const map: Record<string, string[]> = {};
-    (enrollData || []).forEach((e: any) => {
+    (enrollData || []).forEach((e: { student_id: string; course_id: string }) => {
       if (!map[e.student_id]) map[e.student_id] = [];
       map[e.student_id].push(e.course_id);
     });
@@ -1584,7 +1584,7 @@ function CategoryManage({ category, onBack }: { category: Category; onBack: () =
       supabase.from('tasks').select('*').eq('category_id', category.id).order('created_at', { ascending: false }),
       supabase.from('financial_dues').select('*').eq('category_id', category.id).order('created_at', { ascending: false }),
     ]);
-    const enrolledIds = new Set((catEnrollData || []).map((e: any) => e.student_id));
+    const enrolledIds = new Set((catEnrollData || []).map((e: { student_id: string }) => e.student_id));
     setStudents((profileData as Profile[] || []).filter((s) => enrolledIds.has(s.id)));
     setTasks(taskData as Task[] || []);
     setDues(dueData as FinancialDue[] || []);

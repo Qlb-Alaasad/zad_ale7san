@@ -1,20 +1,19 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { CircleAlert as AlertCircle } from 'lucide-react';
+import { useAuth } from '@/lib/auth';
 import { completeAuthSession, resolvePostAuthPath } from '@/lib/auth-helpers';
 import { Loading } from '@/components/ui';
 
 export default function AuthCallbackPage() {
   const navigate = useNavigate();
+  const { refreshProfile } = useAuth();
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
 
     (async () => {
-      // Brief pause so Supabase can exchange the OAuth code/hash from the URL.
-      await new Promise((r) => setTimeout(r, 100));
-
       const { profile, error: authError } = await completeAuthSession();
       if (cancelled) return;
 
@@ -22,11 +21,16 @@ export default function AuthCallbackPage() {
         setError(
           authError === 'no_session'
             ? 'انتهت جلسة تسجيل الدخول. حاول مرة أخرى.'
-            : 'تعذر تحميل ملفك الشخصي. يرجى المحاولة مجدداً.'
+            : authError === 'profile_missing'
+              ? 'تعذر تحميل ملفك الشخصي. يرجى المحاولة مجدداً.'
+              : 'فشل تسجيل الدخول عبر Google. يرجى المحاولة مجدداً.'
         );
         setTimeout(() => navigate('/login', { replace: true }), 2500);
         return;
       }
+
+      await refreshProfile();
+      if (cancelled) return;
 
       navigate(resolvePostAuthPath(profile), { replace: true });
     })();
@@ -34,7 +38,7 @@ export default function AuthCallbackPage() {
     return () => {
       cancelled = true;
     };
-  }, [navigate]);
+  }, [navigate, refreshProfile]);
 
   if (error) {
     return (

@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useState, useRef, type ReactNode } from 'react';
+import { createContext, useContext, useEffect, useState, useRef, useCallback, type ReactNode } from 'react';
 import type { Session } from '@supabase/supabase-js';
 import { supabase } from './supabase';
 import { ensureUserProfile } from './auth-helpers';
@@ -134,9 +134,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     };
   }, []);
 
-  const refreshProfile = async () => {
-    if (session?.user) await loadProfile(session.user.id);
-  };
+  const refreshProfile = useCallback(async () => {
+    const { data } = await supabase.auth.getSession();
+    const uid = data.session?.user?.id ?? session?.user?.id;
+    if (uid) await loadProfile(uid);
+  }, [session?.user?.id]);
 
   const signOut = async () => {
     await supabase.auth.signOut();

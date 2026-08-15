@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { ClipboardList, Plus, Trash2, Save, X, Users, Filter, Edit } from 'lucide-react';
+import { ClipboardList, Plus, Trash2, Save, Users, Filter, Edit } from 'lucide-react';
 import { supabase } from '@/lib/supabase';
 import { createNotification } from '@/lib/notifications';
 import { formatDateArabic } from '@/lib/date';
@@ -74,7 +74,6 @@ export function TasksTab() {
     if (!title.trim()) return;
 
     if (editing) {
-      const status = normalizeTaskStatus(editing);
       await supabase.from('tasks').update({
         title: title.trim(),
         description: description.trim(),

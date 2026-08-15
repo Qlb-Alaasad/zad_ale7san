@@ -1,7 +1,7 @@
 import { useEffect, useState, useRef, useCallback } from 'react';
 import {
-  Star, BookOpen, DollarSign, ClipboardList, Calendar, QrCode, X, Award, TrendingUp,
-  Clock, MapPin, CircleCheck as CheckCircle, CircleAlert as AlertCircle, StickyNote,
+  BookOpen, DollarSign, ClipboardList, QrCode, X, Award, TrendingUp,
+  Clock, CircleCheck as CheckCircle, CircleAlert as AlertCircle,
   LayoutDashboard, Send, Play, History, Info, Bell,
 } from 'lucide-react';
 import { Html5Qrcode } from 'html5-qrcode';
@@ -26,7 +26,7 @@ import type {
 type PortalTab = 'home' | 'tasks' | 'finances' | 'progress';
 
 export default function StudentPortal() {
-  const { profile, session } = useAuth();
+  const { profile } = useAuth();
   const [studentId, setStudentId] = useState<string | null>(null);
   const [inHifzGroup, setInHifzGroup] = useState(false);
   const [portalTab, setPortalTab] = useState<PortalTab>('home');
@@ -123,7 +123,7 @@ export default function StudentPortal() {
     }
     setCoursePoints(pointsMap);
     setLoading(false);
-  }, [profile, session, weekNumber, year]);
+  }, [profile, weekNumber, year]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -149,10 +149,14 @@ export default function StudentPortal() {
       status,
       submission_text: typeof extra.submission_text === 'string' ? extra.submission_text : undefined,
       submitted_at: typeof extra.submitted_at === 'string' ? extra.submitted_at : undefined,
-    });
+    }, normalizeTaskStatus(task));
 
     if (!result.ok) {
-      setLoadError('تعذر تحديث المهمة. يرجى المحاولة مرة أخرى.');
+      setLoadError(
+        result.error === 'invalid_transition'
+          ? 'لا يمكن تنفيذ هذا الإجراء على المهمة في حالتها الحالية.'
+          : 'تعذر تحديث المهمة. يرجى المحاولة مرة أخرى.'
+      );
       return;
     }
 

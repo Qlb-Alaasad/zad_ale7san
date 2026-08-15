@@ -9,8 +9,9 @@
 ### Authentication & User Management
 - Email/password registration and login via Supabase Auth
 - **Google OAuth** via centralized `signInWithGoogle()` helper with dynamic redirect URLs
-- OAuth callback route (`/auth/callback`) syncs profile to DB + `localStorage` cache before routing
-- Redirect URL resolution: `VITE_SITE_URL` (Netlify production) or runtime `window.location.origin` (local dev)
+- OAuth callback route (`/auth/callback`) waits for session exchange, syncs profile to DB + `localStorage`, refreshes auth context, then routes
+- Redirect URL resolution: `VITE_SITE_URL` (Netlify `URL` env at build) or runtime `window.location.origin` (local dev)
+- OAuth callback errors from Supabase query params surfaced with graceful redirect to login
 - Automatic profile creation on signup (database trigger) with client-side fallback for OAuth race conditions
 - First-user auto-promotion to admin (bootstrap logic — no hardcoded admin account)
 - Account approval workflow: new students start as `pending`, admin approves/rejects
@@ -224,7 +225,7 @@ interface FinancialPayment {
 ### Security (Row Level Security)
 - RLS enabled on all tables
 - `is_admin()` SECURITY DEFINER helper for admin CRUD
-- Students: read own rows; update own task progress/submissions via whitelisted client API (`updateStudentTask`)
+- Students: read own rows; update own task progress/submissions via whitelisted client API (`updateStudentTask`) with status transition validation
 - DB trigger `enforce_student_task_update` blocks students from changing task metadata (title, due date, reassignment)
 - Students: read own financial dues and payment ledger (no write access)
 - Admins: full CRUD on all tables
@@ -236,7 +237,7 @@ Add these **Redirect URLs** under Authentication → URL Configuration:
 - `http://localhost:5173/auth/callback` (local Vite dev)
 - `https://<your-netlify-domain>/auth/callback` (production)
 
-Optional env var for production builds:
+Optional env var for production builds (Netlify sets `URL` automatically via `netlify.toml`):
 ```bash
 VITE_SITE_URL=https://<your-netlify-domain>
 ```

@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { User, Mail, Lock, Phone, Calendar, CircleAlert as AlertCircle, CircleCheck as CheckCircle } from 'lucide-react';
 import { supabase } from '@/lib/supabase';
+import { syncProfileCache } from '@/lib/auth-helpers';
 import { AuthLayout } from '@/components/AuthLayout';
 
 export default function RegisterPage() {
@@ -38,7 +39,6 @@ export default function RegisterPage() {
       console.error('[Register] signUp failed:', {
         message: signUpError.message,
         name: signUpError.name,
-        status: (signUpError as any).status,
       });
       setError(signUpError.message === 'User already registered'
         ? 'هذا البريد الإلكتروني مسجل بالفعل'
@@ -55,6 +55,7 @@ export default function RegisterPage() {
           parent_phone: parentPhone,
         })
         .eq('id', data.user.id);
+      await syncProfileCache(data.user);
     }
     setLoading(false);
     navigate('/pending');

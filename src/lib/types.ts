@@ -1,4 +1,4 @@
-export type UserRole = 'admin' | 'student';
+export type UserRole = 'admin' | 'teacher' | 'student';
 export type UserStatus = 'pending' | 'approved' | 'rejected';
 export type AttendanceStatus = 'present' | 'late' | 'absent';
 export type SessionType = 'class' | 'match' | 'event';
@@ -189,6 +189,15 @@ export interface GroupEnrollment {
   student_id: string;
   group_id: string;
   enrolled_at: string;
+}
+
+/** Alias: classes = student_groups (see class_teachers, group_enrollments) */
+export type AcademyClass = StudentGroup;
+
+export interface ClassTeacher {
+  class_id: string;
+  teacher_id: string;
+  assigned_at: string;
 }
 
 export interface EvaluationHistoryRecord {

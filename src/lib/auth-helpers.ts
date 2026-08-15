@@ -2,6 +2,9 @@ import type { User, UserMetadata } from '@supabase/supabase-js';
 import { supabase } from './supabase';
 import { cacheProfile } from './profile-cache';
 import type { Profile } from './types';
+import { dashboardPathForRole } from './roles';
+
+const OAUTH_SESSION_WAIT_MS = 15_000;
 
 /** Production Netlify URL or local dev origin — falls back to runtime origin. */
 export function getSiteOrigin(): string {
@@ -11,6 +14,14 @@ export function getSiteOrigin(): string {
   return '';
 }
 
+/** Parse OAuth error params Supabase may append to the callback URL. */
+export function getOAuthCallbackError(): string | null {
+  if (typeof window === 'undefined') return null;
+  const params = new URLSearchParams(window.location.search);
+  const error = params.get('error_description') || params.get('error');
+  return error?.trim() || null;
+}
+
 /** OAuth redirect target; must be allowlisted in Supabase Auth → URL Configuration. */
 export function getAuthCallbackUrl(): string {
   return `${getSiteOrigin()}/auth/callback`;
@@ -18,8 +29,7 @@ export function getAuthCallbackUrl(): string {
 
 export function resolvePostAuthPath(profile: Profile): string {
   if (profile.status === 'pending' || profile.status === 'rejected') return '/pending';
-  if (profile.role === 'admin') return '/admin';
-  return '/portal';
+  return dashboardPathForRole(profile.role);
 }
 
 const PROFILE_RETRY_MS = [300, 600, 900, 1200, 1500];
@@ -75,6 +85,38 @@ export async function syncProfileCache(user: User): Promise<Profile | null> {
   return profile;
 }
 
+/**
+ * Wait until Supabase finishes exchanging the OAuth code/hash from the callback URL.
+ * Uses getSession first, then listens for SIGNED_IN / INITIAL_SESSION.
+ */
+export async function waitForAuthUser(timeoutMs = OAUTH_SESSION_WAIT_MS): Promise<User | null> {
+  const { data: initial, error: initialError } = await supabase.auth.getSession();
+  if (initialError) {
+    console.error('[auth] getSession during OAuth wait failed:', initialError.message);
+  }
+  if (initial.session?.user) return initial.session.user;
+
+  return new Promise((resolve) => {
+    let settled = false;
+
+    const finish = (user: User | null) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      subscription.unsubscribe();
+      resolve(user);
+    };
+
+    const timer = setTimeout(() => finish(null), timeoutMs);
+
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
+      if (event === 'SIGNED_IN' || event === 'INITIAL_SESSION') {
+        if (session?.user) finish(session.user);
+      }
+    });
+  });
+}
+
 export async function signInWithGoogle(): Promise<{ error: string | null }> {
   const redirectTo = getAuthCallbackUrl();
   const { error } = await supabase.auth.signInWithOAuth({
@@ -97,13 +139,13 @@ export async function signInWithGoogle(): Promise<{ error: string | null }> {
 }
 
 export async function completeAuthSession(): Promise<{ profile: Profile | null; error: string | null }> {
-  const { data: sessionData, error: sessionError } = await supabase.auth.getSession();
-  if (sessionError) {
-    console.error('[auth] getSession failed:', sessionError.message);
-    return { profile: null, error: sessionError.message };
+  const oauthError = getOAuthCallbackError();
+  if (oauthError) {
+    console.error('[auth] OAuth callback error:', oauthError);
+    return { profile: null, error: oauthError };
   }
 
-  const user = sessionData.session?.user;
+  const user = await waitForAuthUser();
   if (!user) {
     return { profile: null, error: 'no_session' };
   }

@@ -1,7 +1,6 @@
 import { useNavigate } from 'react-router-dom';
 import { Clock, LogOut } from 'lucide-react';
 import { useAuth } from '@/lib/auth';
-import { supabase } from '@/lib/supabase';
 
 export default function PendingPage() {
   const navigate = useNavigate();

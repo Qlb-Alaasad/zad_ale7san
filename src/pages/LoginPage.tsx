@@ -1,8 +1,7 @@
 import { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { Mail, Lock, CircleAlert as AlertCircle } from 'lucide-react';
-import { cacheProfile } from '@/lib/auth';
-import { signInWithGoogle, resolvePostAuthPath } from '@/lib/auth-helpers';
+import { signInWithGoogle, resolvePostAuthPath, syncProfileCache } from '@/lib/auth-helpers';
 import { supabase } from '@/lib/supabase';
 import { AuthLayout } from '@/components/AuthLayout';
 import type { Profile } from '@/lib/types';
@@ -23,19 +22,17 @@ export default function LoginPage() {
       console.error('[Login] signInWithPassword failed:', {
         message: signInError.message,
         name: signInError.name,
-        status: (signInError as any).status,
       });
       setError('البريد الإلكتروني أو كلمة المرور غير صحيحة');
       setLoading(false);
       return;
     }
     const { data: userData } = await supabase.auth.getUser();
-    const uid = userData.user?.id;
-    if (uid) {
-      const { data: profile } = await supabase.from('profiles').select('*').eq('id', uid).maybeSingle();
+    const user = userData.user;
+    if (user) {
+      const profile = await syncProfileCache(user);
       if (profile) {
-        cacheProfile(profile);
-        routeAfterLogin(profile as Profile);
+        routeAfterLogin(profile);
         return;
       }
     }

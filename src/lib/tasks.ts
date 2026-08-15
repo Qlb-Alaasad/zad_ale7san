@@ -17,6 +17,14 @@ export const TASK_STATUS_COLORS: Record<TaskStatus, 'gray' | 'gold' | 'forest' |
 
 const VALID_STATUSES: TaskStatus[] = ['assigned', 'in_progress', 'submitted', 'completed'];
 
+/** Allowed student-driven status transitions (defense-in-depth with DB trigger). */
+const STUDENT_STATUS_TRANSITIONS: Record<TaskStatus, TaskStatus[]> = {
+  assigned: ['in_progress'],
+  in_progress: ['submitted', 'completed'],
+  submitted: [],
+  completed: [],
+};
+
 export type StudentTaskUpdate = {
   status?: TaskStatus;
   completed?: boolean;
@@ -65,7 +73,8 @@ export async function getAllTasks(): Promise<Task[]> {
 export async function updateStudentTask(
   taskId: string,
   studentId: string,
-  updates: StudentTaskUpdate
+  updates: StudentTaskUpdate,
+  currentStatus?: TaskStatus
 ): Promise<{ ok: boolean; error?: string }> {
   if (!taskId || !studentId) {
     return { ok: false, error: 'missing_ids' };
@@ -73,6 +82,13 @@ export async function updateStudentTask(
 
   if (updates.status && !VALID_STATUSES.includes(updates.status)) {
     return { ok: false, error: 'invalid_status' };
+  }
+
+  if (updates.status && currentStatus && updates.status !== currentStatus) {
+    const allowed = STUDENT_STATUS_TRANSITIONS[currentStatus] ?? [];
+    if (!allowed.includes(updates.status)) {
+      return { ok: false, error: 'invalid_transition' };
+    }
   }
 
   const payload: Record<string, unknown> = {
