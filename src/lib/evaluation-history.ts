@@ -1,6 +1,6 @@
 import { supabase } from './supabase';
 import { getAcademyWeekYear, getPreviousAcademyWeek, shouldRunFridayReset } from './academy-week';
-import type { Evaluation, StudentNote, Attendance, Profile, EvaluationHistoryRecord } from './types';
+import type { Profile, EvaluationHistoryRecord } from './types';
 
 export async function fetchStudentHistory(
   studentId: string,

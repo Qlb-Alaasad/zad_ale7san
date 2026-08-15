@@ -1,6 +1,8 @@
-import { createContext, useContext, useEffect, useState, useRef, type ReactNode } from 'react';
+import { createContext, useContext, useEffect, useState, useRef, useCallback, type ReactNode } from 'react';
 import type { Session } from '@supabase/supabase-js';
 import { supabase } from './supabase';
+import { ensureUserProfile } from './auth-helpers';
+import { cacheProfile, clearCachedProfile, loadCachedProfile } from './profile-cache';
 import type { Profile } from './types';
 
 interface AuthContextValue {
@@ -11,22 +13,7 @@ interface AuthContextValue {
   refreshProfile: () => Promise<void>;
 }
 
-export const PROFILE_CACHE_KEY = 'user_profile';
-
-export function loadCachedProfile(): Profile | null {
-  try {
-    const raw = localStorage.getItem(PROFILE_CACHE_KEY);
-    if (raw) return JSON.parse(raw) as Profile;
-  } catch {
-    // ignore malformed cache
-  }
-  return null;
-}
-
-export function cacheProfile(profile: Profile) {
-  localStorage.setItem(PROFILE_CACHE_KEY, JSON.stringify(profile));
-}
-
+export { PROFILE_CACHE_KEY, loadCachedProfile, cacheProfile } from './profile-cache';
 const AuthContext = createContext<AuthContextValue>({
   session: null,
   profile: null,
@@ -52,19 +39,30 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       cacheProfile(p);
       profileLoadedRef.current = p.id;
     } else {
-      localStorage.removeItem(PROFILE_CACHE_KEY);
+      clearCachedProfile();
       profileLoadedRef.current = null;
     }
   };
 
   const loadProfile = async (uid: string) => {
     if (!mountedRef.current) return;
-    const { data, error } = await supabase.from('profiles').select('*').eq('id', uid).maybeSingle();
-    if (error) {
-      console.error('Failed to load profile:', error.message);
-      return;
+    const { data: sessionData } = await supabase.auth.getSession();
+    const user = sessionData.session?.user;
+
+    let profile: Profile | null = null;
+
+    if (user?.id === uid) {
+      profile = await ensureUserProfile(user);
+    } else {
+      const { data, error } = await supabase.from('profiles').select('*').eq('id', uid).maybeSingle();
+      if (error) {
+        console.error('Failed to load profile:', error.message);
+        return;
+      }
+      profile = data as Profile | null;
     }
-    setProfileAndCache(data as Profile | null);
+
+    setProfileAndCache(profile);
   };
 
   useEffect(() => {
@@ -136,9 +134,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     };
   }, []);
 
-  const refreshProfile = async () => {
-    if (session?.user) await loadProfile(session.user.id);
-  };
+  const refreshProfile = useCallback(async () => {
+    const { data } = await supabase.auth.getSession();
+    const uid = data.session?.user?.id ?? session?.user?.id;
+    if (uid) await loadProfile(uid);
+  }, [session?.user?.id]);
 
   const signOut = async () => {
     await supabase.auth.signOut();

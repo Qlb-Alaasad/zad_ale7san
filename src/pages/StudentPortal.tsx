@@ -1,13 +1,13 @@
 import { useEffect, useState, useRef, useCallback } from 'react';
 import {
-  Star, BookOpen, DollarSign, ClipboardList, Calendar, QrCode, X, Award, TrendingUp,
-  Clock, MapPin, CircleCheck as CheckCircle, CircleAlert as AlertCircle, StickyNote,
-  LayoutDashboard, Send, Play, History, Info,
+  BookOpen, DollarSign, ClipboardList, QrCode, X, Award, TrendingUp,
+  Clock, CircleCheck as CheckCircle, CircleAlert as AlertCircle,
+  LayoutDashboard, Send, Play, History, Info, Bell,
 } from 'lucide-react';
 import { Html5Qrcode } from 'html5-qrcode';
 import { supabase } from '@/lib/supabase';
 import { useAuth } from '@/lib/auth';
-import { DashboardLayout } from '@/components/DashboardLayout';
+import { DashboardLayout, type DashboardNavItem } from '@/components/DashboardLayout';
 import { Modal } from '@/components/Modal';
 import { Loading, EmptyState, Badge } from '@/components/ui';
 import { StarRating } from '@/components/StarRating';
@@ -15,7 +15,7 @@ import { computeStarFills, getCategoryStars, getCurrentWeekYear, computeStudentS
 import { filterCategoriesForHifz, isStudentInHifzGroup } from '@/lib/groups';
 import { verifyQrPayload, sessionSecret } from '@/lib/qr';
 import { formatDateArabic, formatTimeArabic } from '@/lib/date';
-import { TASK_STATUS_LABELS, TASK_STATUS_COLORS, isTaskOverdue, normalizeTaskStatus, taskProgressPercent, getTasksForStudent } from '@/lib/tasks';
+import { TASK_STATUS_LABELS, TASK_STATUS_COLORS, isTaskOverdue, normalizeTaskStatus, taskProgressPercent, getTasksForStudent, updateStudentTask } from '@/lib/tasks';
 import { financeSummary, PAYMENT_METHOD_LABELS, getFinancialDuesForStudent, getFinancialPaymentsForStudent } from '@/lib/finances';
 import { resolveStudentId } from '@/lib/student-id';
 import type {
@@ -26,7 +26,7 @@ import type {
 type PortalTab = 'home' | 'tasks' | 'finances' | 'progress';
 
 export default function StudentPortal() {
-  const { profile, session } = useAuth();
+  const { profile } = useAuth();
   const [studentId, setStudentId] = useState<string | null>(null);
   const [inHifzGroup, setInHifzGroup] = useState(false);
   const [portalTab, setPortalTab] = useState<PortalTab>('home');
@@ -43,6 +43,7 @@ export default function StudentPortal() {
   const [coursePoints, setCoursePoints] = useState<Record<string, number>>({});
   const [basePoints, setBasePoints] = useState(100);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [scannerOpen, setScannerOpen] = useState(false);
   const [scanResult, setScanResult] = useState<{ success: boolean; message: string } | null>(null);
   const [showSuccessOverlay, setShowSuccessOverlay] = useState(false);
@@ -57,10 +58,11 @@ export default function StudentPortal() {
   const load = useCallback(async () => {
     const sid = await resolveStudentId(profile);
     if (!sid) {
-      console.warn('[StudentPortal] load aborted — no student id');
+      setLoadError('تعذر تحميل بيانات حسابك. يرجى إعادة تسجيل الدخول.');
       setLoading(false);
       return;
     }
+    setLoadError(null);
     setStudentId(sid);
     const hifz = await isStudentInHifzGroup(sid);
     setInHifzGroup(hifz);
@@ -121,7 +123,7 @@ export default function StudentPortal() {
     }
     setCoursePoints(pointsMap);
     setLoading(false);
-  }, [profile, session, weekNumber, year]);
+  }, [profile, weekNumber, year]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -140,12 +142,24 @@ export default function StudentPortal() {
   }, [studentId, load]);
 
   const updateTaskStatus = async (task: Task, status: TaskStatus, extra: Record<string, unknown> = {}) => {
-    await supabase.from('tasks').update({
+    const sid = studentId ?? (await resolveStudentId(profile));
+    if (!sid) return;
+
+    const result = await updateStudentTask(task.id, sid, {
       status,
-      completed: status === 'completed',
-      updated_at: new Date().toISOString(),
-      ...extra,
-    }).eq('id', task.id);
+      submission_text: typeof extra.submission_text === 'string' ? extra.submission_text : undefined,
+      submitted_at: typeof extra.submitted_at === 'string' ? extra.submitted_at : undefined,
+    }, normalizeTaskStatus(task));
+
+    if (!result.ok) {
+      setLoadError(
+        result.error === 'invalid_transition'
+          ? 'لا يمكن تنفيذ هذا الإجراء على المهمة في حالتها الحالية.'
+          : 'تعذر تحديث المهمة. يرجى المحاولة مرة أخرى.'
+      );
+      return;
+    }
+
     load();
   };
 
@@ -240,18 +254,36 @@ export default function StudentPortal() {
     }
   };
 
-  const navItems = [
-    { path: '/portal', label: 'البوابة', icon: <BookOpen className="w-5 h-5" /> },
-  ];
-
   const portalTabs: { key: PortalTab; label: string; icon: React.ReactNode }[] = [
     { key: 'home', label: 'الرئيسية', icon: <LayoutDashboard className="w-4 h-4" /> },
     { key: 'tasks', label: 'المهام', icon: <ClipboardList className="w-4 h-4" /> },
     { key: 'finances', label: 'المالية', icon: <DollarSign className="w-4 h-4" /> },
-    { key: 'progress', label: 'التقدم', icon: <TrendingUp className="w-4 h-4" /> },
+    { key: 'progress', label: 'الإنجاز والتقدم', icon: <TrendingUp className="w-4 h-4" /> },
   ];
 
-  if (loading) return <DashboardLayout navItems={navItems}><Loading /></DashboardLayout>;
+  const sidebarNavItems: DashboardNavItem[] = [
+    { id: 'home', label: 'الرئيسية', icon: <LayoutDashboard className="w-5 h-5" />, onClick: () => setPortalTab('home'), active: portalTab === 'home' },
+    { id: 'tasks', label: 'المهام', icon: <ClipboardList className="w-5 h-5" />, onClick: () => setPortalTab('tasks'), active: portalTab === 'tasks' },
+    { id: 'finances', label: 'المالية', icon: <DollarSign className="w-5 h-5" />, onClick: () => setPortalTab('finances'), active: portalTab === 'finances' },
+    { id: 'progress', label: 'الإنجاز والتقدم', icon: <TrendingUp className="w-5 h-5" />, onClick: () => setPortalTab('progress'), active: portalTab === 'progress' },
+    { id: 'notifications', label: 'الإشعارات', icon: <Bell className="w-5 h-5" /> },
+  ];
+
+  if (loading) return <DashboardLayout navItems={sidebarNavItems}><Loading /></DashboardLayout>;
+
+  if (loadError) {
+    return (
+      <DashboardLayout navItems={sidebarNavItems}>
+        <div className="card text-center py-10">
+          <AlertCircle className="w-10 h-10 text-red-500 mx-auto mb-3" />
+          <p className="text-charcoal-600 mb-4">{loadError}</p>
+          <button type="button" onClick={() => { setLoading(true); load(); }} className="btn btn-primary">
+            إعادة المحاولة
+          </button>
+        </div>
+      </DashboardLayout>
+    );
+  }
 
   const categoryStars = getCategoryStars(categories, evaluations);
   const enrolledCourseIds = enrolledCourses.map((c) => c.id);
@@ -273,7 +305,7 @@ export default function StudentPortal() {
   const supervisorNotes = notes.filter((n) => ['supervisor', 'absence', 'excuse', 'custom'].includes(n.note_type)).slice(0, 5);
 
   return (
-    <DashboardLayout navItems={navItems}>
+    <DashboardLayout navItems={sidebarNavItems}>
       {/* Header */}
       <div className="mb-4 bg-forest-900 rounded-2xl p-6 text-cream-50 relative overflow-hidden">
         <div className="absolute top-0 left-0 w-48 h-48 rounded-full bg-gold-400/10 blur-3xl" />

@@ -2,6 +2,11 @@
   publish = "dist"
   command = "npm run build"
 
+# Pass Netlify site URL to Vite for OAuth redirect allowlisting at build time.
+# Runtime still falls back to window.location.origin when unset.
+[build.environment]
+  VITE_SITE_URL = "${URL}"
+
 [[redirects]]
   from = "/*"
   to = "/index.html"

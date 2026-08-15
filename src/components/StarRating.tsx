@@ -1,5 +1,3 @@
-import { Star } from 'lucide-react';
-
 interface StarRatingProps {
   fills: number[];
   size?: number;

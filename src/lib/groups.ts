@@ -1,5 +1,5 @@
 import { supabase } from './supabase';
-import type { StudentGroup, GroupEnrollment } from './types';
+import type { StudentGroup } from './types';
 
 export async function getAllGroups(): Promise<StudentGroup[]> {
   const { data, error } = await supabase.from('student_groups').select('*').order('name');

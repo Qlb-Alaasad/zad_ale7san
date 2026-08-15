@@ -17,23 +17,13 @@ export async function resolveStudentId(profile: Profile | null): Promise<string 
   }
 
   if (user?.id) {
-    if (profile?.id && profile.id !== user.id) {
-      console.warn('[student-id] Cached profile.id differs from auth user id — using auth user id', {
-        profileId: profile.id,
-        authUserId: user.id,
-      });
-    }
     return user.id;
   }
 
   if (profile?.id) {
-    console.warn('[student-id] No auth user session; falling back to cached profile.id', {
-      profileId: profile.id,
-    });
     return profile.id;
   }
 
-  console.warn('[student-id] Could not resolve student id (no auth user and no profile)');
   return null;
 }
 

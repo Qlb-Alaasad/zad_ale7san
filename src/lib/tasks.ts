@@ -15,22 +15,27 @@ export const TASK_STATUS_COLORS: Record<TaskStatus, 'gray' | 'gold' | 'forest' |
   completed: 'green',
 };
 
-function logTaskFetchError(operation: string, studentId: string, error: { message: string; code?: string; details?: string; hint?: string }) {
-  console.error(`[tasks] ${operation} failed — possible RLS block or schema mismatch`, {
-    studentId,
-    message: error.message,
-    code: error.code,
-    details: error.details,
-    hint: error.hint,
-  });
-}
+const VALID_STATUSES: TaskStatus[] = ['assigned', 'in_progress', 'submitted', 'completed'];
+
+/** Allowed student-driven status transitions (defense-in-depth with DB trigger). */
+const STUDENT_STATUS_TRANSITIONS: Record<TaskStatus, TaskStatus[]> = {
+  assigned: ['in_progress'],
+  in_progress: ['submitted', 'completed'],
+  submitted: [],
+  completed: [],
+};
+
+export type StudentTaskUpdate = {
+  status?: TaskStatus;
+  completed?: boolean;
+  submission_text?: string;
+  submitted_at?: string | null;
+  submission_file_path?: string | null;
+};
 
 /** Fetch all tasks assigned to a student (student_id = auth.users.id / profiles.id). */
 export async function getTasksForStudent(studentId: string): Promise<Task[]> {
-  if (!studentId) {
-    console.warn('[tasks] getTasksForStudent called with empty studentId');
-    return [];
-  }
+  if (!studentId) return [];
 
   const { data, error } = await supabase
     .from('tasks')
@@ -39,18 +44,11 @@ export async function getTasksForStudent(studentId: string): Promise<Task[]> {
     .order('created_at', { ascending: false });
 
   if (error) {
-    logTaskFetchError('getTasksForStudent', studentId, error);
+    console.error('[tasks] getTasksForStudent failed:', error.message);
     return [];
   }
 
-  const tasks = (data as Task[]) || [];
-  if (tasks.length === 0) {
-    console.info('[tasks] getTasksForStudent returned 0 rows', { studentId });
-  } else {
-    console.debug('[tasks] getTasksForStudent ok', { studentId, count: tasks.length });
-  }
-
-  return tasks;
+  return (data as Task[]) || [];
 }
 
 /** Admin: fetch all tasks (RLS allows admin full select). */
@@ -61,16 +59,65 @@ export async function getAllTasks(): Promise<Task[]> {
     .order('created_at', { ascending: false });
 
   if (error) {
-    console.error('[tasks] getAllTasks failed:', {
-      message: error.message,
-      code: error.code,
-      details: error.details,
-      hint: error.hint,
-    });
+    console.error('[tasks] getAllTasks failed:', error.message);
     return [];
   }
 
   return (data as Task[]) || [];
+}
+
+/**
+ * Student-safe task update — whitelisted fields only, scoped to owning student.
+ * RLS + DB trigger provide additional enforcement.
+ */
+export async function updateStudentTask(
+  taskId: string,
+  studentId: string,
+  updates: StudentTaskUpdate,
+  currentStatus?: TaskStatus
+): Promise<{ ok: boolean; error?: string }> {
+  if (!taskId || !studentId) {
+    return { ok: false, error: 'missing_ids' };
+  }
+
+  if (updates.status && !VALID_STATUSES.includes(updates.status)) {
+    return { ok: false, error: 'invalid_status' };
+  }
+
+  if (updates.status && currentStatus && updates.status !== currentStatus) {
+    const allowed = STUDENT_STATUS_TRANSITIONS[currentStatus] ?? [];
+    if (!allowed.includes(updates.status)) {
+      return { ok: false, error: 'invalid_transition' };
+    }
+  }
+
+  const payload: Record<string, unknown> = {
+    updated_at: new Date().toISOString(),
+  };
+
+  if (updates.status !== undefined) {
+    payload.status = updates.status;
+    payload.completed = updates.status === 'completed';
+  }
+  if (updates.completed !== undefined && updates.status === undefined) {
+    payload.completed = updates.completed;
+  }
+  if (updates.submission_text !== undefined) payload.submission_text = updates.submission_text;
+  if (updates.submitted_at !== undefined) payload.submitted_at = updates.submitted_at;
+  if (updates.submission_file_path !== undefined) payload.submission_file_path = updates.submission_file_path;
+
+  const { error } = await supabase
+    .from('tasks')
+    .update(payload)
+    .eq('id', taskId)
+    .eq('student_id', studentId);
+
+  if (error) {
+    console.error('[tasks] updateStudentTask failed:', error.message);
+    return { ok: false, error: error.message };
+  }
+
+  return { ok: true };
 }
 
 export function isTaskOverdue(task: Task): boolean {
@@ -112,17 +159,9 @@ export async function insertTasksForStudents(rows: TaskInsertRow[]): Promise<{ o
   const { error } = await supabase.from('tasks').insert(payload);
 
   if (error) {
-    console.error('[tasks] insertTasksForStudents failed:', {
-      rowCount: payload.length,
-      studentIds: payload.map((r) => r.student_id),
-      message: error.message,
-      code: error.code,
-      details: error.details,
-      hint: error.hint,
-    });
+    console.error('[tasks] insertTasksForStudents failed:', error.message);
     return { ok: false, error: error.message };
   }
 
-  console.debug('[tasks] insertTasksForStudents ok', { rowCount: payload.length });
   return { ok: true };
 }
