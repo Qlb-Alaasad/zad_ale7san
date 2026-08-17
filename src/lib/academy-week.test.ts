@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   getAcademyWeekBounds,
-n  getAcademyWeekYear,
+  getAcademyWeekYear,
   getPreviousAcademyWeek,
   shouldRunFridayReset,
 } from './academy-week';
