@@ -16,7 +16,7 @@ const mockProfile: Profile = {
 
 describe('profile-cache', () => {
   beforeEach(() => {
-    localStorage.clear();
+    window.localStorage.clear();
   });
 
   it('round-trips a profile through localStorage', () => {
@@ -30,7 +30,7 @@ describe('profile-cache', () => {
   });
 
   it('returns null and does not throw on malformed JSON', () => {
-    localStorage.setItem(PROFILE_CACHE_KEY, 'not-json');
+    window.localStorage.setItem(PROFILE_CACHE_KEY, 'not-json');
     expect(loadCachedProfile()).toBeNull();
   });
 

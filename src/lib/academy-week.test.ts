@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   getAcademyWeekBounds,
-  getAcademyWeekYear,
+n  getAcademyWeekYear,
   getPreviousAcademyWeek,
   shouldRunFridayReset,
 } from './academy-week';
@@ -68,7 +68,8 @@ describe('shouldRunFridayReset', () => {
   });
 
   it('returns false on Thursday before Friday', () => {
-    const thursday = new Date('2026-08-13T23:59:59');
+    // Use local-time constructor to avoid timezone drift across CI runners
+    const thursday = new Date(2026, 7, 13, 23, 59, 59); // 13 Aug 2026 23:59:59 local
     expect(shouldRunFridayReset(null, thursday)).toBe(false);
   });
 });

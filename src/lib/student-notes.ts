@@ -14,7 +14,7 @@ export type StudentNoteInput = {
 
 export type StudentNoteUpdate = Partial<Omit<StudentNoteInput, 'student_id'>>;
 
-function resolvePointsImpact(input: { points_impact?: number; excused?: boolean; note_type?: NoteType }): number {
+export function resolvePointsImpact(input: { points_impact?: number; excused?: boolean; note_type?: NoteType }): number {
   if (input.excused) return 0;
   if (input.points_impact !== undefined) return input.points_impact;
   if (input.note_type === 'absence') return -5;

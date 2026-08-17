@@ -15,7 +15,7 @@ export function computeStarFills(pointsDeducted: number, maxPoints: number = 25)
   const fills: number[] = [];
   let remaining = earned;
   for (let i = 0; i < 5; i++) {
-    const fill = Math.min(1, remaining / pointsPerStar);
+    const fill = Math.max(0, Math.min(1, remaining / pointsPerStar));
     fills.push(fill);
     remaining -= pointsPerStar;
   }
@@ -31,61 +31,6 @@ export function filterEvaluationsForStudent(
   if (inHifzGroup) return evaluations;
   const hifzIds = new Set(categories.filter((c) => c.is_hifz).map((c) => c.id));
   return evaluations.filter((e) => !hifzIds.has(e.category_id));
-}
-
-/**
- * Compute course points excluding Hifz-only evaluations for non-Hifz students.
- */
-// In computeStudentScore (lines 46-61)
-export function computeStudentScore(
-  courseIds: string[],
-  basePoints: number,
-  evaluations: Evaluation[],
-  notes: StudentNote[],
-  categories: Category[],
-  inHifzGroup: boolean
-): { points: number; pct: number } {
-  const safeBase = Math.max(0, basePoints || 100);
-  const filteredEvals = filterEvaluationsForStudent(evaluations, categories, inHifzGroup);
-  if (courseIds.length === 0) {
-    const globalOnly = computeGlobalScoreAdjustments(filteredEvals, notes);
-    const points = Math.max(0, Math.round(safeBase + globalOnly));
-    return { points, pct: safeBase > 0 ? Math.round((points / safeBase) * 100) : 0 };
-  }
-  const avg =
-    courseIds.reduce(
-      (sum, cid) => sum + computeCoursePoints(cid, safeBase, filteredEvals, notes),
-      0
-    ) / courseIds.length;
-  const globalAdjustments = computeGlobalScoreAdjustments(filteredEvals, notes);
-  const points = Math.max(0, Math.round(avg + globalAdjustments));
-  return { points, pct: safeBase > 0 ? Math.round((points / safeBase) * 100) : 0 };
-}
-
-/**
- * Build a map of categoryId -> evaluation for the current week.
- */
-export function indexEvaluationsByCategory(evals: Evaluation[]): Record<string, Evaluation> {
-  const map: Record<string, Evaluation> = {};
-  for (const e of evals) {
-    map[e.category_id] = e;
-  }
-  return map;
-}
-
-/**
- * Aggregate evaluations for a given week into per-category star fills.
- */
-export function getCategoryStars(
-  categories: Category[],
-  evaluations: Evaluation[]
-): { category: Category; fills: number[]; pointsDeducted: number }[] {
-  const evalMap = indexEvaluationsByCategory(evaluations);
-  return categories.map((cat) => {
-    const ev = evalMap[cat.id];
-    const deducted = ev?.points_deducted ?? 0;
-    return { category: cat, fills: computeStarFills(deducted, cat.max_points), pointsDeducted: deducted };
-  });
 }
 
 /**
@@ -126,4 +71,58 @@ export function computeGlobalScoreAdjustments(
     .reduce((sum, n) => sum + (n.points_impact || 0), 0);
 
   return -globalEvalDeduction + globalNoteImpact;
+}
+
+/**
+ * Compute course points excluding Hifz-only evaluations for non-Hifz students.
+ */
+export function computeStudentScore(
+  courseIds: string[],
+  basePoints: number,
+  evaluations: Evaluation[],
+  notes: StudentNote[],
+  categories: Category[],
+  inHifzGroup: boolean
+): { points: number; pct: number } {
+  const safeBase = basePoints == null ? 100 : Math.max(0, basePoints);
+  const filteredEvals = filterEvaluationsForStudent(evaluations, categories, inHifzGroup);
+  if (courseIds.length === 0) {
+    const globalOnly = computeGlobalScoreAdjustments(filteredEvals, notes);
+    const points = Math.max(0, Math.round(safeBase + globalOnly));
+    return { points, pct: safeBase > 0 ? Math.round((points / safeBase) * 100) : 0 };
+  }
+  const avg =
+    courseIds.reduce(
+      (sum, cid) => sum + computeCoursePoints(cid, safeBase, filteredEvals, notes),
+      0
+    ) / courseIds.length;
+  const globalAdjustments = computeGlobalScoreAdjustments(filteredEvals, notes);
+  const points = Math.max(0, Math.round(avg + globalAdjustments));
+  return { points, pct: safeBase > 0 ? Math.round((points / safeBase) * 100) : 0 };
+}
+
+/**
+ * Build a map of categoryId -> evaluation for the current week.
+ */
+export function indexEvaluationsByCategory(evals: Evaluation[]): Record<string, Evaluation> {
+  const map: Record<string, Evaluation> = {};
+  for (const e of evals) {
+    map[e.category_id] = e;
+  }
+  return map;
+}
+
+/**
+ * Aggregate evaluations for a given week into per-category star fills.
+ */
+export function getCategoryStars(
+  categories: Category[],
+  evaluations: Evaluation[]
+): { category: Category; fills: number[]; pointsDeducted: number }[] {
+  const evalMap = indexEvaluationsByCategory(evaluations);
+  return categories.map((cat) => {
+    const ev = evalMap[cat.id];
+    const deducted = ev?.points_deducted ?? 0;
+    return { category: cat, fills: computeStarFills(deducted, cat.max_points), pointsDeducted: deducted };
+  });
 }

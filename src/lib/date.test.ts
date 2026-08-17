@@ -31,7 +31,8 @@ describe('formatDateArabic', () => {
 
   it('formats a valid ISO date', () => {
     const result = formatDateArabic('2026-08-15T10:00:00Z');
-    expect(result).toContain('2026');
+    // Arabic-EG locale may use Eastern Arabic numerals (٢٠٢٦) or Western (2026)
+    expect(result).toMatch(/٢٠٢٦|2026/);
   });
 });
 
