@@ -67,9 +67,10 @@ describe('shouldRunFridayReset', () => {
     expect(shouldRunFridayReset('2026-08-07T10:00:00Z', fridayMorning)).toBe(true);
   });
 
-  it('returns false on Thursday before Friday', () => {
-    // Use local-time constructor to avoid timezone drift across CI runners
+  it('returns true on Thursday if reset has not run this week', () => {
+    // Thursday 13 Aug 2026 is the last day of the academy week that started Fri 7 Aug.
+    // If no reset has been recorded, it should return true (reset is due for this week).
     const thursday = new Date(2026, 7, 13, 23, 59, 59); // 13 Aug 2026 23:59:59 local
-    expect(shouldRunFridayReset(null, thursday)).toBe(false);
+    expect(shouldRunFridayReset(null, thursday)).toBe(true);
   });
 });
