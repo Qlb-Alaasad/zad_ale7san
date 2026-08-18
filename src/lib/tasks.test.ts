@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   isTaskOverdue,
   normalizeTaskStatus,
@@ -7,6 +7,23 @@ import {
   updateStudentTask,
 } from './tasks';
 import type { Task, TaskStatus } from './types';
+
+// Mock Supabase to avoid real network calls during test execution
+vi.mock('./supabase', () => {
+  return {
+    supabase: {
+      from: vi.fn(() => ({
+        select: vi.fn().mockReturnThis(),
+        update: vi.fn().mockReturnThis(),
+        insert: vi.fn().mockReturnThis(),
+        eq: vi.fn().mockReturnThis(),
+        order: vi.fn().mockResolvedValue({ data: [], error: null }),
+        single: vi.fn().mockResolvedValue({ data: null, error: null }),
+        then: vi.fn().mockImplementation((resolve) => resolve({ data: [], error: null })),
+      })),
+    },
+  };
+});
 
 function task(overrides: Partial<Task> & Pick<Task, 'id' | 'student_id'>): Task {
   return {
@@ -59,7 +76,7 @@ describe('teacher/admin task oversight', () => {
   });
 });
 
-// ========== NEW EDGE CASES ==========
+// ========== EDGE CASES ==========
 
 describe('isTaskOverdue edge cases', () => {
   it('returns false when due_date is null', () => {
@@ -83,7 +100,6 @@ describe('isTaskOverdue edge cases', () => {
 
   it('returns false for same-day task at 23:59 boundary', () => {
     const t = task({ id: 't1', student_id: 's1', due_date: new Date().toISOString(), status: 'assigned' });
-    // Because due date is set to 23:59:59.999, it should NOT be overdue on the same calendar day
     expect(isTaskOverdue(t)).toBe(false);
   });
 });
@@ -108,10 +124,8 @@ describe('updateStudentTask validation', () => {
   });
 
   it('allows valid assigned → in_progress transition', async () => {
-    // This would need a Supabase mock for full integration; unit-test the guard only.
     const result = await updateStudentTask('t1', 's1', { status: 'in_progress' }, 'assigned');
-    // Since we have no mock, Supabase will fail; we at least verify the guard passed.
-    expect(result.error).not.toBe('invalid_transition');
-    expect(result.error).not.toBe('invalid_status');
+    expect(result.ok).toBe(true);
+    expect(result.error).toBeUndefined();
   });
 });
