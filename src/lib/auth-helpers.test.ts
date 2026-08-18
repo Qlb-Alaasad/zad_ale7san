@@ -6,15 +6,19 @@ describe('getSiteOrigin', () => {
   const originalLocation = window.location;
 
   beforeEach(() => {
-    // @ts-expect-error — mocking read-only location for tests
-    delete window.location;
-    // @ts-expect-error
-    window.location = { ...originalLocation, origin: 'http://localhost:5173' };
+    Object.defineProperty(window, 'location', {
+      value: { ...originalLocation, origin: 'http://localhost:5173' },
+      configurable: true,
+      writable: true,
+    });
   });
 
   afterEach(() => {
-    // @ts-expect-error
-    window.location = originalLocation;
+    Object.defineProperty(window, 'location', {
+      value: originalLocation,
+      configurable: true,
+      writable: true,
+    });
   });
 
   it('falls back to window.location.origin when env is missing', () => {
