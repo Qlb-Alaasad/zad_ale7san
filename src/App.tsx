@@ -9,10 +9,17 @@ import PendingPage from '@/pages/PendingPage';
 import AuthCallbackPage from '@/pages/AuthCallbackPage';
 import AdminDashboard from '@/pages/AdminDashboard';
 import StudentPortal from '@/pages/StudentPortal';
+import TeacherDashboard from '@/pages/TeacherDashboard';
 import LandingPage from '@/pages/LandingPage';
 import { Loading } from '@/components/ui';
+import { dashboardPathForRole } from '@/lib/roles';
+import type { UserRole } from '@/lib/types';
 
-function ProtectedRoute({ children, requireAdmin }: { children: ReactNode; requireAdmin?: boolean }) {
+/**
+ * Sprint 1: role-aware guard. `allow` lists the roles permitted on a route;
+ * anyone else is bounced to their own dashboard (no dead ends).
+ */
+function ProtectedRoute({ children, allow }: { children: ReactNode; allow: UserRole[] }) {
   const { session, profile, loading } = useAuth();
   const location = useLocation();
 
@@ -28,8 +35,9 @@ function ProtectedRoute({ children, requireAdmin }: { children: ReactNode; requi
   if (effectiveProfile?.status === 'pending') return <Navigate to="/pending" replace />;
   if (effectiveProfile?.status === 'rejected') return <Navigate to="/pending" replace />;
 
-  if (requireAdmin && effectiveProfile?.role !== 'admin') return <Navigate to="/portal" replace />;
-  if (!requireAdmin && effectiveProfile?.role === 'admin') return <Navigate to="/admin" replace />;
+  if (effectiveProfile && !allow.includes(effectiveProfile.role)) {
+    return <Navigate to={dashboardPathForRole(effectiveProfile.role)} replace />;
+  }
 
   return <>{children}</>;
 }
@@ -45,8 +53,9 @@ export default function App() {
             <Route path="/login" element={<GuestRoute><LoginPage /></GuestRoute>} />
             <Route path="/register" element={<GuestRoute><RegisterPage /></GuestRoute>} />
             <Route path="/pending" element={<PendingRoute><PendingPage /></PendingRoute>} />
-            <Route path="/admin" element={<ProtectedRoute requireAdmin><AdminDashboard /></ProtectedRoute>} />
-            <Route path="/portal" element={<ProtectedRoute><StudentPortal /></ProtectedRoute>} />
+            <Route path="/admin" element={<ProtectedRoute allow={['admin']}><AdminDashboard /></ProtectedRoute>} />
+            <Route path="/teacher" element={<ProtectedRoute allow={['teacher', 'admin']}><TeacherDashboard /></ProtectedRoute>} />
+            <Route path="/portal" element={<ProtectedRoute allow={['student']}><StudentPortal /></ProtectedRoute>} />
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>
         </BrowserRouter>

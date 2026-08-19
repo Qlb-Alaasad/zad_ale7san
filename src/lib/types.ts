@@ -15,6 +15,7 @@ export interface Profile {
   status: UserStatus;
   quran_progress: number;
   current_module: string;
+  avatar_url?: string | null;
   created_at: string;
 }
 
@@ -72,6 +73,12 @@ export interface Session {
   id: string;
   course_id: string | null;
   category_id: string | null;
+  /** Sprint 1: sessions can belong to a class circle (student_groups). */
+  group_id: string | null;
+  /** Sprint 1: per-session substitute teacher override. */
+  substitute_teacher_id: string | null;
+  /** Sprint 1: calendar date for generated/planned sessions. */
+  scheduled_date: string | null;
   title: string;
   description: string;
   session_type: SessionType;
@@ -129,6 +136,7 @@ export interface Task {
   completed: boolean;
   submission_text: string;
   submitted_at: string | null;
+  submission_file_path?: string | null;
   updated_at: string;
   created_at: string;
   category?: Category;
@@ -156,15 +164,23 @@ export interface QrToken {
 
 export type NoteType = 'supervisor' | 'absence' | 'general' | 'excuse' | 'custom';
 
+/** Sprint 1: who can see a note. */
+export type NoteVisibility = 'private_staff' | 'student' | 'shared_parent';
+
 export interface StudentNote {
   id: string;
   student_id: string;
   course_id: string | null;
   session_id: string | null;
+  category_id?: string | null;
   note: string;
   note_type: NoteType;
   points_impact: number;
   excused: boolean;
+  /** Sprint 1: private_staff notes are hidden from students. */
+  visibility: NoteVisibility;
+  /** Sprint 1: author attribution (auto-filled by DB trigger). */
+  created_by: string | null;
   created_at: string;
   course?: Course;
 }
@@ -182,6 +198,16 @@ export interface StudentGroup {
   name: string;
   description: string;
   is_hifz: boolean;
+  /** Sprint 1: group configuration (إعدادات الشعبة). */
+  capacity: number | null;
+  /** JS weekday numbers: 0=Sunday … 6=Saturday. */
+  schedule_days: number[] | null;
+  schedule_start_time: string | null;
+  schedule_end_time: string | null;
+  location: string;
+  is_online: boolean;
+  meeting_url: string | null;
+  primary_teacher_id: string | null;
   created_at: string;
 }
 
@@ -194,10 +220,54 @@ export interface GroupEnrollment {
 /** Alias: classes = student_groups (see class_teachers, group_enrollments) */
 export type AcademyClass = StudentGroup;
 
+/** Sprint 1: how a teacher is attached to a class. */
+export type ClassAssignmentRole = 'primary' | 'assistant' | 'substitute';
+
 export interface ClassTeacher {
   class_id: string;
   teacher_id: string;
+  assignment_role: ClassAssignmentRole;
   assigned_at: string;
+}
+
+/** Sprint 1: per-session quick evaluation (daily → weekly rollup). */
+export interface SessionScore {
+  id: string;
+  session_id: string;
+  student_id: string;
+  teacher_id: string | null;
+  attendance_score: number | null;
+  recitation_score: number | null;
+  behavior_score: number | null;
+  note: string;
+  created_at: string;
+  updated_at: string;
+}
+
+/** Sprint 1: result of the server-verified QR check-in RPC. */
+export interface QrCheckInResult {
+  ok: boolean;
+  code:
+    | 'checked_in'
+    | 'invalid_payload'
+    | 'expired'
+    | 'invalid_signature'
+    | 'session_not_found'
+    | 'session_inactive'
+    | 'already_recorded'
+    | 'rpc_error'
+    | 'unknown';
+  status?: AttendanceStatus;
+  message: string;
+}
+
+/** Sprint 1: weekly aggregate returned by get_student_session_rollup. */
+export interface SessionScoreRollup {
+  sessions_count: number;
+  avg_attendance: number;
+  avg_recitation: number;
+  avg_behavior: number;
+  avg_overall: number;
 }
 
 export interface EvaluationHistoryRecord {

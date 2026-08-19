@@ -13,7 +13,7 @@ import { Loading, EmptyState, Badge } from '@/components/ui';
 import { StarRating } from '@/components/StarRating';
 import { computeStarFills, getCategoryStars, getCurrentWeekYear, computeStudentScore, filterEvaluationsForStudent } from '@/lib/scoring';
 import { filterCategoriesForHifz, isStudentInHifzGroup } from '@/lib/groups';
-import { verifyQrPayload, sessionSecret } from '@/lib/qr';
+import { parseQrPayload, checkInWithQr } from '@/lib/qr';
 import { formatDateArabic, formatTimeArabic } from '@/lib/date';
 import { TASK_STATUS_LABELS, TASK_STATUS_COLORS, isTaskOverdue, normalizeTaskStatus, taskProgressPercent, getTasksForStudent, updateStudentTask } from '@/lib/tasks';
 import { financeSummary, PAYMENT_METHOD_LABELS, getFinancialDuesForStudent, getFinancialPaymentsForStudent } from '@/lib/finances';
@@ -211,37 +211,27 @@ export default function StudentPortal() {
     if (!sid || isScanningPaused.current) return;
     isScanningPaused.current = true;
     try {
-      const parsed = JSON.parse(payload);
-      const verifyResult = await verifyQrPayload(payload, sessionSecret(parsed.s as string));
-      if (!verifyResult.valid || !verifyResult.sessionId) {
-        setScanResult({ success: false, message: 'رمز غير صالح أو منتهي الصلاحية' });
+      // Sprint 1: client only shape-checks; the server verifies the signature
+      // and creates the attendance row via the check_in_with_qr RPC.
+      const parsed = parseQrPayload(payload);
+      if (!parsed) {
+        setScanResult({ success: false, message: 'رمز غير صالح' });
         isScanningPaused.current = false;
         return;
       }
-      const sessionId = verifyResult.sessionId;
-      const { data: existing } = await supabase.from('attendance').select('*').eq('student_id', sid).eq('session_id', sessionId).maybeSingle();
+      const { data: existing } = await supabase.from('attendance').select('id').eq('student_id', sid).eq('session_id', parsed.s).maybeSingle();
       if (existing) {
         setScanResult({ success: false, message: 'تم تسجيل حضورك مسبقاً لهذه الحصة' });
         isScanningPaused.current = false;
         return;
       }
-      const { data: sessionRow } = await supabase.from('sessions').select('*').eq('id', sessionId).maybeSingle();
-      if (!sessionRow) {
-        setScanResult({ success: false, message: 'الحصة غير موجودة' });
+      const result = await checkInWithQr(payload);
+      if (!result.ok) {
+        setScanResult({ success: false, message: result.message });
         isScanningPaused.current = false;
         return;
       }
-      if (!sessionRow.is_active) {
-        setScanResult({ success: false, message: 'الحصة غير نشطة حالياً. اطلب من الشيخ تفعيلها.' });
-        isScanningPaused.current = false;
-        return;
-      }
-      const now = new Date();
-      const start = sessionRow.start_time ? new Date(sessionRow.start_time) : now;
-      const lateThreshold = new Date(start.getTime() + 15 * 60000);
-      const status = now > lateThreshold ? 'late' : 'present';
-      await supabase.from('attendance').insert({ student_id: sid, session_id: sessionId, status, points_deducted: 0 });
-      setScanResult({ success: true, message: status === 'late' ? 'تم تسجيل حضورك (متأخر)' : 'تم تسجيل الحضور بنجاح' });
+      setScanResult({ success: true, message: result.message });
       setShowSuccessOverlay(true);
       load();
       cooldownTimerRef.current = setTimeout(() => {
@@ -254,7 +244,6 @@ export default function StudentPortal() {
       isScanningPaused.current = false;
     }
   };
-
   const portalTabs: { key: PortalTab; label: string; icon: React.ReactNode }[] = [
     { key: 'home', label: 'الرئيسية', icon: <LayoutDashboard className="w-4 h-4" /> },
     { key: 'tasks', label: 'المهام', icon: <ClipboardList className="w-4 h-4" /> },

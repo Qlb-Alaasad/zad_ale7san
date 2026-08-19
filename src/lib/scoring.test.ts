@@ -20,6 +20,8 @@ function note(overrides: Partial<StudentNote> & Pick<StudentNote, 'id' | 'studen
     note_type: 'supervisor',
     points_impact: 0,
     excused: false,
+    visibility: 'student',
+    created_by: null,
     created_at: '2026-01-01T00:00:00Z',
     ...overrides,
   };

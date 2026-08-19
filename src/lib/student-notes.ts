@@ -1,5 +1,5 @@
 import { supabase } from './supabase';
-import type { NoteType, StudentNote } from './types';
+import type { NoteType, NoteVisibility, StudentNote } from './types';
 
 export type StudentNoteInput = {
   student_id: string;
@@ -10,9 +10,17 @@ export type StudentNoteInput = {
   category_id?: string | null;
   points_impact?: number;
   excused?: boolean;
+  /** Sprint 1: default 'student' — visible to the student. */
+  visibility?: NoteVisibility;
 };
 
-export type StudentNoteUpdate = Partial<Omit<StudentNoteInput, 'student_id'>>;
+export type StudentNoteUpdate = Partial<StudentNoteInput>;
+
+export const NOTE_VISIBILITY_LABELS: Record<NoteVisibility, string> = {
+  private_staff: 'خاصة بالمشرفين',
+  student: 'مرئية للطالب',
+  shared_parent: 'مرئية لولي الأمر',
+};
 
 export function resolvePointsImpact(input: { points_impact?: number; excused?: boolean; note_type?: NoteType }): number {
   if (input.excused) return 0;
@@ -51,6 +59,8 @@ export async function createStudentNote(
       category_id: input.category_id ?? null,
       points_impact,
       excused: input.excused ?? false,
+      visibility: input.visibility ?? 'student',
+      // created_by is auto-filled by the trg_student_notes_created_by trigger.
     })
     .select('*')
     .single();
@@ -74,6 +84,7 @@ export async function updateStudentNote(
   if (updates.course_id !== undefined) payload.course_id = updates.course_id;
   if (updates.session_id !== undefined) payload.session_id = updates.session_id;
   if (updates.category_id !== undefined) payload.category_id = updates.category_id;
+  if (updates.visibility !== undefined) payload.visibility = updates.visibility;
   if (updates.excused !== undefined) payload.excused = updates.excused;
 
   if (updates.points_impact !== undefined || updates.excused !== undefined || updates.note_type !== undefined) {
